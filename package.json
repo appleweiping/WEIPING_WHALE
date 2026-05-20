@@ -1,0 +1,51 @@
+{
+  "name": "deepseek-cli-agent",
+  "version": "0.1.0",
+  "description": "Interactive terminal coding agent powered by DeepSeek with native MCP support and shared memory",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "deepseek": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts --format esm --out-dir dist --clean",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "deepseek",
+    "cli",
+    "agent",
+    "mcp",
+    "coding-agent",
+    "terminal",
+    "ai",
+    "tool-use",
+    "agentmemory"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/deepseek-cli"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "files": [
+    "dist/",
+    "config.toml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "@iarna/toml": "^2.2.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsdown": "^0.9.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  }
+}

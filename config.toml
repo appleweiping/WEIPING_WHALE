@@ -1,0 +1,17 @@
+[llm]
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
+temperature = 0.3
+max_tokens = 4096
+
+[agent]
+max_iterations = 50
+workspace = "."
+
+[mcp_servers.agentmemory]
+command = "C:/Users/admin/AppData/Local/OpenAI/Codex/bin/node.exe"
+args = ["C:/Users/admin/AppData/Roaming/npm/node_modules/@agentmemory/agentmemory/dist/standalone.mjs"]
+
+[mcp_servers.agentmemory.env]
+AGENTMEMORY_URL = "http://localhost:3111"

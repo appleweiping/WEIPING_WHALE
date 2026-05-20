@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/deepseek-cli-agent"><img src="https://img.shields.io/npm/v/deepseek-cli-agent?color=CB3837&label=npm&style=for-the-badge&logo=npm" alt="npm version" /></a>
-  <a href="https://github.com/user/deepseek-cli/blob/main/LICENSE"><img src="https://img.shields.io/github/license/user/deepseek-cli?color=blue&style=for-the-badge" alt="License" /></a>
+  <a href="https://github.com/appleweiping/deepseek-cli/blob/main/LICENSE"><img src="https://img.shields.io/github/license/appleweiping/deepseek-cli?color=blue&style=for-the-badge" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -73,7 +73,7 @@ npx deepseek-cli-agent
 Or clone and build:
 
 ```bash
-git clone https://github.com/user/deepseek-cli.git
+git clone https://github.com/appleweiping/deepseek-cli.git
 cd deepseek-cli
 npm install && npm run build
 node dist/index.js

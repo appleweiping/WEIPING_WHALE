@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="DeepSeek CLI — Interactive coding agent with MCP support" width="720" />
+  <img src="assets/banner.png" alt="DeepSeek CLI — Open-source AI in your terminal" width="720" />
 </p>
 
 <p align="center">
@@ -22,10 +22,6 @@
 ## What is this?
 
 DeepSeek CLI is an **interactive coding agent** that runs in your terminal — like Claude Code or Codex, but powered by DeepSeek models. It can read/write files, execute commands, search code, and connect to any MCP server (including shared memory systems like [agentmemory](https://github.com/rohitg00/agentmemory)).
-
-<p align="center">
-  <img src="assets/demo.gif" alt="DeepSeek CLI demo" width="640" />
-</p>
 
 ## Works alongside
 

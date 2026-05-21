@@ -84,12 +84,27 @@ export DEEPSEEK_API_KEY="sk-..."
 # Interactive mode
 deepseek
 
+# Inspect local setup without calling the model
+deepseek --doctor
+
 # Single task
 deepseek -t "refactor the auth module to use JWT"
 
 # With a specific model
 DEEPSEEK_MODEL=deepseek-v4-pro deepseek -t "review this PR for security issues"
 ```
+
+## Terminal Experience
+
+DeepSeek CLI is designed to feel like a small Claude Code / Codex-style terminal agent:
+
+- Branded startup panel with model, current directory, built-in tool count, and MCP status
+- One-line `deepseek ›` prompt for interactive tasks
+- Visible `thinking...` and per-tool progress lines while the agent works
+- Slash commands: `/help`, `/status`, `/clear`, `/exit`
+- `--doctor` for machine-readable setup checks before a live model call
+
+In the local multi-agent setup, the file-based shared memory lives at `D:\research\Vipin's Knowledgebase\memory\`. MCP-based agentmemory can also be connected through the `mcp_servers` config when a running memory server is available.
 
 ## Features
 

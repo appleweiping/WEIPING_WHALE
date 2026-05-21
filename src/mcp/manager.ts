@@ -23,6 +23,10 @@ export class MCPManager {
     return this.clients.flatMap((c) => c.getToolDefs());
   }
 
+  getServerCount(): number {
+    return this.clients.length;
+  }
+
   async callTool(fullName: string, args: Record<string, any>): Promise<ToolResult | null> {
     for (const client of this.clients) {
       const prefix = `mcp_${client.serverName}_`;

@@ -1,6 +1,8 @@
 import { spawn } from "child_process";
 import { registerTool } from "./registry.js";
 
+const isWindows = process.platform === "win32";
+
 registerTool(
   "execute_bash",
   "Execute a shell command and return stdout/stderr. Use for running programs, git, npm, etc.",
@@ -14,10 +16,10 @@ registerTool(
   },
   async ({ command, timeout = 30000 }) => {
     return new Promise((resolve) => {
-      const proc = spawn("bash", ["-c", command], {
+      const proc = spawn(isWindows ? "powershell.exe" : "bash", isWindows ? ["-NoProfile", "-Command", command] : ["-c", command], {
         timeout,
         maxBuffer: 1024 * 1024,
-        shell: true,
+        shell: false,
       });
 
       let stdout = "";

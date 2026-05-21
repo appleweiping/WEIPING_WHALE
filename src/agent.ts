@@ -23,12 +23,13 @@ export class Agent {
     this.messages.push({ role: "system", content: systemPrompt });
   }
 
-  async run(userMessage: string, onToken?: (t: string) => void): Promise<string> {
+  async run(userMessage: string, events: AgentEvents = {}): Promise<string> {
     this.messages.push({ role: "user", content: userMessage });
 
     const allTools = [...getToolDefs(), ...this.mcpManager.getToolDefs()];
 
     for (let i = 0; i < this.maxIterations; i++) {
+      events.onThinking?.(i + 1);
       const result = await this.client.complete({
         messages: this.messages,
         tools: allTools.length > 0 ? allTools : undefined,
@@ -47,7 +48,7 @@ export class Agent {
       });
 
       for (const tc of result.tool_calls) {
-        const toolResult = await this.executeTool(tc);
+        const toolResult = await this.executeTool(tc, events);
         this.messages.push({
           role: "tool",
           content: toolResult,
@@ -59,7 +60,7 @@ export class Agent {
     return "[max iterations reached]";
   }
 
-  private async executeTool(tc: ToolCall): Promise<string> {
+  private async executeTool(tc: ToolCall, events: AgentEvents): Promise<string> {
     const name = tc.function.name;
     let args: Record<string, any>;
     try {
@@ -68,15 +69,29 @@ export class Agent {
       return "Error: invalid JSON arguments";
     }
 
-    process.stderr.write(`  [tool] ${name}(${JSON.stringify(args).slice(0, 80)})\n`);
+    const startedAt = Date.now();
+    events.onToolStart?.(name, args);
 
     const mcpResult = await this.mcpManager.callTool(name, args);
-    if (mcpResult) return mcpResult.output;
+    if (mcpResult) {
+      events.onToolEnd?.(name, Date.now() - startedAt, Boolean(mcpResult.error));
+      return mcpResult.output;
+    }
 
     const tool = getTool(name);
-    if (!tool) return `Unknown tool: ${name}`;
+    if (!tool) {
+      events.onToolEnd?.(name, Date.now() - startedAt, true);
+      return `Unknown tool: ${name}`;
+    }
 
     const result = await tool.handler(args);
+    events.onToolEnd?.(name, Date.now() - startedAt, Boolean(result.error));
     return result.output;
   }
+}
+
+export interface AgentEvents {
+  onThinking?: (iteration: number) => void;
+  onToolStart?: (name: string, args: Record<string, any>) => void;
+  onToolEnd?: (name: string, elapsedMs: number, error: boolean) => void;
 }

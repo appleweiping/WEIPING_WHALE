@@ -1,5 +1,6 @@
 ﻿import { EventEmitter } from "events";
 import * as readline from "readline";
+import { PassThrough } from "stream";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -9,7 +10,6 @@ const BLUE = "\x1b[34m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
-const MAGENTA = "\x1b[35m";
 const INVERSE = "\x1b[7m";
 
 export interface RuntimeStatus {
@@ -24,31 +24,20 @@ export interface BannerStats {
 }
 
 export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) {
-  console.log(formatWhaleLogo());
-  console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
-  console.log(`${CYAN}${BOLD}|${RESET} ${MAGENTA}${BOLD}deepseek${RESET} ${BOLD}CLI${RESET}  ${DIM}Claude Code / Codex style${RESET}       ${CYAN}${BOLD}|${RESET}`);
-  console.log(`${CYAN}${BOLD}|${RESET} model    ${GREEN}${pad(runtime.model, 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
-  console.log(`${CYAN}${BOLD}|${RESET} thinking ${YELLOW}${pad(formatThinking(runtime), 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
-  console.log(`${CYAN}${BOLD}|${RESET} cwd      ${DIM}${pad(shorten(cwd, 36), 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
-  console.log(`${CYAN}${BOLD}|${RESET} tools    ${YELLOW}${pad(`${stats.toolCount} total, ${stats.mcpServerCount} MCP`, 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
-  console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
-  console.log(`${DIM}Type / or \\ for the command palette, /help for commands, /exit to quit.${RESET}`);
+  const w = Math.min(process.stdout.columns || 80, 60);
+  const line = "─".repeat(w);
+  console.log();
+  console.log(`  ${BLUE}${BOLD}DeepSeek CLI${RESET}  ${DIM}v1${RESET}`);
+  console.log(`  ${DIM}${line}${RESET}`);
+  console.log(`  ${DIM}model${RESET}     ${GREEN}${runtime.model}${RESET}`);
+  console.log(`  ${DIM}thinking${RESET}   ${YELLOW}${formatThinking(runtime)}${RESET}`);
+  console.log(`  ${DIM}cwd${RESET}       ${shorten(cwd, w - 12)}`);
+  console.log(`  ${DIM}tools${RESET}     ${stats.toolCount} total, ${stats.mcpServerCount} MCP`);
+  console.log(`  ${DIM}${line}${RESET}`);
+  console.log(`  ${DIM}Type / or \\ for commands, /help for help, /exit to quit.${RESET}`);
   console.log();
 }
 
-function formatWhaleLogo(): string {
-  return [
-    `${BLUE}${BOLD}                 .-''''''-.        _.--.   ${RESET} ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
-    `${BLUE}${BOLD}             .-''  .--.   ''-.  .'  .-'   ${RESET} ${DIM}blue whale coding agent${RESET}`,
-    `${CYAN}   .     .   ${BLUE}${BOLD}.'    .'${RESET}${BLUE}    '.     \/  .'      ${CYAN}.  .${RESET}`,
-    `${CYAN} .   :   . ${BLUE}${BOLD}/     /${RESET}${BLUE}  .--.  \        /   _.--.  ${CYAN}:   .${RESET}`,
-    `${CYAN}   . ' .  ${BLUE}${BOLD}|    |${RESET}${BLUE}  (    )  |      /_.-'  .'  ${CYAN}. ' .${RESET}`,
-    `${BLUE}${BOLD}          |    |${RESET}${BLUE}   '--'   |          _.-'${RESET}     ${MAGENTA}${BOLD}\\/${RESET}`,
-    `${BLUE}${BOLD}           \    \${RESET}${BLUE}        /      _..-'${RESET}      ${CYAN}\/ ${BLUE}${BOLD}/\${RESET}`,
-    `${BLUE}${BOLD}            '.   '.___.'   _.-'${RESET}          ${CYAN}\___/${RESET}`,
-    `${BLUE}${BOLD}              '-._______.-'${RESET}    ${CYAN}__..--${RESET}  ${BLUE}${BOLD}deepseek${RESET}`,
-  ].join("\n");
-}
 const PROMPT_TEXT = "\u2501\u2501 ";
 const PROMPT = `${BLUE}${BOLD}${PROMPT_TEXT}${RESET}`;
 const MAX_MENU_ITEMS = 9;
@@ -108,9 +97,11 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
   private selectionAnchor: number | null = null;
   private slashMenu: SlashMenuResult | null = null;
   private slashIndex = 0;
+  private slashScrollOffset = 0;
   private mouseSelecting = false;
   private inputStartRow = 1;
   private pendingControlSequence = "";
+  private pendingControlTimer: ReturnType<typeof setTimeout> | null = null;
   private slashMenuItemStartRow: number | null = null;
   private slashMenuMoreRow: number | null = null;
   private slashMenuEndRow: number | null = null;
@@ -118,17 +109,24 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
   private readonly output: NodeJS.WriteStream;
   private readonly slashMenuProvider?: SlashMenuProvider;
   private readonly keypressHandler: (str: string | undefined, key: KeyInfo) => void;
+  private readonly dataHandler: (chunk: Buffer) => void;
+  private readonly keypressProxy: PassThrough;
+  private mouseDataBuffer = "";
+  private mouseDataTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(input: NodeJS.ReadStream, output: NodeJS.WriteStream, slashMenuProvider?: SlashMenuProvider) {
     super();
     this.input = input;
     this.output = output;
     this.slashMenuProvider = slashMenuProvider;
+    this.keypressProxy = new PassThrough();
     this.keypressHandler = (str, key) => this.handleKey(str, key);
-    readline.emitKeypressEvents(this.input);
+    this.dataHandler = (chunk: Buffer) => this.interceptMouseData(chunk);
+    this.input.on("data", this.dataHandler);
+    readline.emitKeypressEvents(this.keypressProxy as unknown as NodeJS.ReadStream);
     this.input.setRawMode?.(true);
     this.input.resume();
-    this.input.on("keypress", this.keypressHandler);
+    this.keypressProxy.on("keypress", this.keypressHandler);
     this.output.write(SHOW_CURSOR + ENABLE_MOUSE_TRACKING);
   }
 
@@ -140,7 +138,13 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
   }
 
   close(): void {
-    this.input.off("keypress", this.keypressHandler);
+    this.clearPendingTimer();
+    if (this.mouseDataTimer !== null) {
+      clearTimeout(this.mouseDataTimer);
+      this.mouseDataTimer = null;
+    }
+    this.input.off("data", this.dataHandler);
+    this.keypressProxy.off("keypress", this.keypressHandler);
     this.output.write(SHOW_CURSOR + DISABLE_MOUSE_TRACKING);
     this.input.setRawMode?.(false);
     this.emit("close");
@@ -162,10 +166,15 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     this.handleKey(str, key);
   }
 
+  debugData(raw: string): void {
+    this.interceptMouseData(Buffer.from(raw, "binary"));
+  }
+
   private handleKey(str: string | undefined, key: KeyInfo): void {
     if (!this.active) return;
     const sequence = str ?? key.sequence ?? "";
-    if (this.handleControlSequence(sequence, key)) return;
+    const rawSequence = key.sequence ?? str ?? "";
+    if (this.handleControlSequence(sequence, rawSequence, key)) return;
     if (key.ctrl && key.name === "c") {
       this.output.write("\n");
       this.close();
@@ -194,11 +203,25 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     }
     if (this.slashMenu && (key.name === "up" || (key.ctrl && key.name === "p"))) {
       this.slashIndex = Math.max(0, this.slashIndex - 1);
+      this.ensureSlashIndexVisible();
       this.render();
       return;
     }
     if (this.slashMenu && (key.name === "down" || (key.ctrl && key.name === "n"))) {
-      this.slashIndex = Math.min(this.visibleSlashItems().length - 1, this.slashIndex + 1);
+      this.slashIndex = Math.min(this.slashMenu.items.length - 1, this.slashIndex + 1);
+      this.ensureSlashIndexVisible();
+      this.render();
+      return;
+    }
+    if (this.slashMenu && key.name === "pageup") {
+      this.slashIndex = Math.max(0, this.slashIndex - MAX_MENU_ITEMS);
+      this.ensureSlashIndexVisible();
+      this.render();
+      return;
+    }
+    if (this.slashMenu && key.name === "pagedown") {
+      this.slashIndex = Math.min(this.slashMenu.items.length - 1, this.slashIndex + MAX_MENU_ITEMS);
+      this.ensureSlashIndexVisible();
       this.render();
       return;
     }
@@ -274,6 +297,7 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     this.selectionAnchor = null;
     this.slashMenu = null;
     this.slashIndex = 0;
+    this.slashScrollOffset = 0;
     this.mouseSelecting = false;
     this.active = false;
     this.currentCursorRow = 0;
@@ -397,43 +421,118 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     return true;
   }
 
-  private handleControlSequence(sequence: string, key: KeyInfo): boolean {
+  private static readonly SGR_MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([mM])/g;
+  private static readonly LEGACY_MOUSE_RE = /\x1b\[M([\s\S]{3})/g;
+  private static readonly PARTIAL_MOUSE_TAIL_RE = /\x1b(?:\[(?:<(?:\d+(?:;\d*){0,2})?)?)?$/;
+  private static readonly PARTIAL_LEGACY_TAIL_RE = /\x1b\[M[\s\S]{0,2}$/;
+
+  private interceptMouseData(chunk: Buffer): void {
+    if (this.mouseDataTimer !== null) {
+      clearTimeout(this.mouseDataTimer);
+      this.mouseDataTimer = null;
+    }
+    let data = this.mouseDataBuffer + chunk.toString("binary");
+    this.mouseDataBuffer = "";
+
+    const partialTail = data.match(TerminalLineReader.PARTIAL_MOUSE_TAIL_RE)
+      || data.match(TerminalLineReader.PARTIAL_LEGACY_TAIL_RE);
+    if (partialTail) {
+      this.mouseDataBuffer = data.slice(partialTail.index!);
+      data = data.slice(0, partialTail.index!);
+      this.mouseDataTimer = setTimeout(() => {
+        this.mouseDataTimer = null;
+        const flush = this.mouseDataBuffer;
+        this.mouseDataBuffer = "";
+        if (flush.length > 0) {
+          this.keypressProxy.write(Buffer.from(flush, "binary"));
+        }
+      }, 50);
+    }
+
+    let clean = data;
+    clean = clean.replace(TerminalLineReader.SGR_MOUSE_RE, (_match, code, x, y, suffix) => {
+      this.applyMouseEvent(Number(code), Number(x), Number(y), suffix as "m" | "M", true);
+      return "";
+    });
+    clean = clean.replace(TerminalLineReader.LEGACY_MOUSE_RE, (_match, chars) => {
+      const code = chars.charCodeAt(0) - 32;
+      const x = chars.charCodeAt(1) - 32;
+      const y = chars.charCodeAt(2) - 32;
+      this.applyMouseEvent(code, x, y, "M", false);
+      return "";
+    });
+
+    if (clean.length > 0) {
+      this.keypressProxy.write(Buffer.from(clean, "binary"));
+    }
+  }
+
+  private handleControlSequence(sequence: string, rawSequence: string, key: KeyInfo): boolean {
     if (this.pendingControlSequence) {
-      this.pendingControlSequence += sequence;
-      if (this.tryHandlePendingControlSequence()) return true;
-      if (this.pendingControlSequence.length > 64) this.pendingControlSequence = "";
-      return true;
-    }
-    if (!sequence) return false;
-    if (sequence === "\x1b" && !key.name) {
-      this.pendingControlSequence = sequence;
-      return true;
-    }
-    if (!key.name && sequence.startsWith("\x1b")) {
-      if (this.isPartialMouseSequence(sequence)) {
-        this.pendingControlSequence = sequence;
+      this.clearPendingTimer();
+      const chunk = sequence || rawSequence;
+      if (!chunk) return true;
+      this.pendingControlSequence += chunk;
+      if (this.isCompleteMouseSequence(this.pendingControlSequence)) {
+        this.handleMouseSequence(this.pendingControlSequence);
+        this.pendingControlSequence = "";
         return true;
       }
-      return this.handleMouseSequence(sequence);
+      if (this.isPartialMouseSequence(this.pendingControlSequence)) {
+        this.startPendingTimer();
+        return true;
+      }
+      this.pendingControlSequence = "";
+      return true;
+    }
+    if (!sequence && !rawSequence) return false;
+    if (sequence === "\x1b" && !key.name) {
+      this.pendingControlSequence = "\x1b";
+      this.startPendingTimer();
+      return true;
+    }
+    const effective = !key.name ? (rawSequence || sequence) : "";
+    if (effective.startsWith("\x1b") && effective.length > 1) {
+      if (this.isCompleteMouseSequence(effective)) {
+        return this.handleMouseSequence(effective);
+      }
+      if (this.isPartialMouseSequence(effective)) {
+        this.pendingControlSequence = effective;
+        this.startPendingTimer();
+        return true;
+      }
+      return true;
     }
     return false;
   }
 
-  private tryHandlePendingControlSequence(): boolean {
-    if (this.isPartialMouseSequence(this.pendingControlSequence)) return true;
-    if (this.isCompleteMouseSequence(this.pendingControlSequence) && this.handleMouseSequence(this.pendingControlSequence)) {
+  private startPendingTimer(onTimeout?: () => void): void {
+    this.pendingControlTimer = setTimeout(() => {
       this.pendingControlSequence = "";
-      return true;
+      this.pendingControlTimer = null;
+      if (onTimeout) onTimeout();
+    }, 50);
+  }
+
+  private clearPendingTimer(): void {
+    if (this.pendingControlTimer !== null) {
+      clearTimeout(this.pendingControlTimer);
+      this.pendingControlTimer = null;
     }
-    if (this.pendingControlSequence.startsWith("\x1b")) {
-      this.pendingControlSequence = "";
-      return true;
+  }
+
+  private flushEscape(): void {
+    if (this.slashMenu || this.hasSelection()) {
+      this.slashMenu = null;
+      this.clearSelection();
+      this.render();
     }
-    return false;
   }
 
   private isPartialMouseSequence(sequence: string): boolean {
-    return /^\x1b(?:\[|\[<|\[<\d+(?:;\d*){0,2})?$/.test(sequence);
+    if (/^\x1b(?:\[|\[<|\[<\d+(?:;\d*){0,2})?$/.test(sequence)) return true;
+    if (sequence.startsWith("\x1b[M") && sequence.length < 6) return true;
+    return false;
   }
 
   private isCompleteMouseSequence(sequence: string): boolean {
@@ -441,9 +540,25 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
   }
 
   private applyMouseEvent(code: number, x: number, y: number, suffix: "m" | "M", isSgr: boolean): void {
+    if (this.isScrollEvent(code)) {
+      if (this.slashMenu && this.slashMenu.items.length > MAX_MENU_ITEMS) {
+        const scrollUp = (code & 3) === 0;
+        if (scrollUp) {
+          this.slashScrollOffset = Math.max(0, this.slashScrollOffset - 1);
+          this.slashIndex = Math.max(this.slashIndex, this.slashScrollOffset);
+        } else {
+          const maxOffset = this.slashMenu.items.length - MAX_MENU_ITEMS;
+          this.slashScrollOffset = Math.min(maxOffset, this.slashScrollOffset + 1);
+          this.slashIndex = Math.min(this.slashIndex, this.slashScrollOffset + MAX_MENU_ITEMS - 1);
+        }
+        this.render();
+      }
+      return;
+    }
     if (suffix === "M" && this.isPrimaryMousePress(code)) {
       if (this.handleSlashMenuClick(y)) return;
     }
+    if (!this.isPrimaryMouseButton(code)) return;
     const index = this.cursorIndexFromTerminalCell(x, y);
     if (index === null) return;
     if (suffix === "M" && (code & 32) === 0) {
@@ -463,6 +578,14 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     this.render();
   }
 
+  private isScrollEvent(code: number): boolean {
+    return (code & 64) !== 0;
+  }
+
+  private isPrimaryMouseButton(code: number): boolean {
+    return (code & 3) === 0;
+  }
+
   private isPrimaryMousePress(code: number): boolean {
     return (code & 32) === 0 && (code & 64) === 0 && (code & 3) === 0;
   }
@@ -474,7 +597,7 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     const index = targetRow - this.slashMenuItemStartRow;
     const items = this.visibleSlashItems();
     if (index >= 0 && index < items.length) {
-      this.slashIndex = index;
+      this.slashIndex = this.slashScrollOffset + index;
       this.acceptSlashSelection();
       return true;
     }
@@ -536,21 +659,36 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     if (!this.slashMenuProvider || this.hasSelection()) {
       this.slashMenu = null;
       this.slashIndex = 0;
+      this.slashScrollOffset = 0;
       return;
     }
     const menu = this.slashMenuProvider({ line: this.chars.join(""), cursor: this.cursor });
     this.slashMenu = menu && menu.items.length > 0 ? menu : null;
-    if (!keepIndex || !this.slashMenu) this.slashIndex = 0;
-    else this.slashIndex = Math.min(this.slashIndex, this.visibleSlashItems().length - 1);
+    if (!keepIndex || !this.slashMenu) {
+      this.slashIndex = 0;
+      this.slashScrollOffset = 0;
+    } else {
+      this.slashIndex = Math.min(this.slashIndex, this.slashMenu.items.length - 1);
+      this.ensureSlashIndexVisible();
+    }
   }
 
   private visibleSlashItems(): SlashMenuItem[] {
-    return (this.slashMenu?.items ?? []).slice(0, MAX_MENU_ITEMS);
+    const items = this.slashMenu?.items ?? [];
+    return items.slice(this.slashScrollOffset, this.slashScrollOffset + MAX_MENU_ITEMS);
+  }
+
+  private ensureSlashIndexVisible(): void {
+    if (this.slashIndex < this.slashScrollOffset) {
+      this.slashScrollOffset = this.slashIndex;
+    } else if (this.slashIndex >= this.slashScrollOffset + MAX_MENU_ITEMS) {
+      this.slashScrollOffset = this.slashIndex - MAX_MENU_ITEMS + 1;
+    }
   }
 
   private acceptSlashSelection(): void {
     const menu = this.slashMenu;
-    const item = this.visibleSlashItems()[this.slashIndex];
+    const item = menu?.items[this.slashIndex];
     if (!menu || !item) return;
     const replaceStart = item.replaceStart ?? menu.replaceStart;
     const replaceEnd = item.replaceEnd ?? menu.replaceEnd;
@@ -605,18 +743,26 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     if (!this.slashMenu) return 0;
     const items = this.visibleSlashItems();
     if (items.length === 0) return 0;
+    const totalItems = this.slashMenu.items.length;
     const width = Math.min(Math.max(44, ...items.map((item) => stripAnsi(`${item.label} ${item.description}`).length + 6)), columns - 2);
-    const lines = [`${DIM}${this.slashMenu.title}${RESET}`];
+    const lines: string[] = [];
+    if (this.slashScrollOffset > 0) {
+      lines.push(`${DIM}    ▲ ${this.slashScrollOffset} more${RESET}`);
+    } else {
+      lines.push(`${DIM}${this.slashMenu.title}${RESET}`);
+    }
     for (let index = 0; index < items.length; index++) {
       const item = items[index];
-      const selected = index === this.slashIndex;
+      const absoluteIndex = this.slashScrollOffset + index;
+      const selected = absoluteIndex === this.slashIndex;
       const prefix = selected ? `${BLUE}${BOLD}>${RESET}` : " ";
       const label = selected ? `${BOLD}${item.label}${RESET}` : item.label;
       const raw = `${prefix} ${label} ${DIM}${item.description}${RESET}`;
       lines.push(truncateDisplay(raw, width));
     }
-    if ((this.slashMenu.items.length ?? 0) > items.length) {
-      lines.push(`${DIM}    keep typing to filter ${this.slashMenu.items.length - items.length} more commands${RESET}`);
+    const remaining = totalItems - (this.slashScrollOffset + items.length);
+    if (remaining > 0) {
+      lines.push(`${DIM}    ▼ ${remaining} more${RESET}`);
       this.slashMenuMoreRow = inputEndRow + 2 + items.length;
     }
     this.slashMenuItemStartRow = inputEndRow + 2;
@@ -746,7 +892,7 @@ function truncateDisplay(value: string, width: number): string {
     output += value[index];
     visible += 1;
   }
-  return output + `${DIM}?${RESET}`;
+  return output + `${DIM}…${RESET}`;
 }
 
 export function printAssistant(text: string) {
@@ -785,7 +931,7 @@ ${BOLD}DeepSeek CLI commands${RESET}
   /sessions [n]        List recent saved sessions
   /memory <cmd>        Save session summary to agentmemory: save, status
   /retry               Retry the last user request after a network failure
-  /permissions         Show permission, sandbox, and write-mode controls
+  /permissions <mode>  Switch permission model: safe, read-only, trusted, locked
   /approval <mode>     Set shell approvals: on-request, auto, never
   /sandbox <mode>      Set file-write sandbox: workspace-write, read-only, unrestricted
   /write-mode <mode>   Set file writes: preview, direct
@@ -807,7 +953,8 @@ ${BOLD}DeepSeek CLI commands${RESET}
 ${BOLD}Command palette${RESET}
   Type / or \\ at the start of a whitespace-delimited token to open choices.
   The palette works mid-line, filters as you type, and opens nested choices for model, approval, sandbox, write-mode, and pending IDs.
-  Use Up/Down to move, Tab or Enter to accept, Escape to dismiss.
+  Use Up/Down to move, PageUp/PageDown to jump, Tab or Enter to accept, Escape to dismiss.
+  Mouse wheel scrolls the menu; click an item to select it.
 
 ${BOLD}Line editing${RESET}
   Long wrapped input supports Left/Right, Home/End, Backspace/Delete, and Up/Down visual-row movement.
@@ -849,10 +996,6 @@ function formatThinking(runtime: RuntimeStatus): string {
   return runtime.thinking === "enabled"
     ? `${runtime.thinking}, ${runtime.reasoning_effort}`
     : runtime.thinking;
-}
-
-function pad(value: string, width: number): string {
-  return value.length >= width ? value.slice(0, width) : value + " ".repeat(width - value.length);
 }
 
 function shorten(value: string, width: number): string {

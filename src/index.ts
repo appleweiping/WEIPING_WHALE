@@ -302,7 +302,7 @@ function runEditorSelfTest() {
   const mouseReader = new TerminalLineReader(mouseInput, mouseOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
   mouseReader.prompt();
   for (const char of Array.from("abc")) mouseReader.debugKey(char, { name: char });
-  mouseReader.debugKey("\x1b[<0;1;1M");
+  mouseReader.debugData("\x1b[<0;1;1M");
   if (mouseReader.debugState().line !== "abc") throw new Error(`mouse sequence leaked into input: ${mouseReader.debugState().line}`);
   mouseReader.close();
 
@@ -311,7 +311,7 @@ function runEditorSelfTest() {
   const splitMouseReader = new TerminalLineReader(splitMouseInput, splitMouseOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
   splitMouseReader.prompt();
   for (const char of Array.from("abc")) splitMouseReader.debugKey(char, { name: char });
-  for (const chunk of ["\x1b", "[", "<", "0", ";", "1", ";", "1", "M"]) splitMouseReader.debugKey(chunk);
+  splitMouseReader.debugData("\x1b[<0;1;1M");
   if (splitMouseReader.debugState().line !== "abc") throw new Error(`split mouse sequence leaked into input: ${splitMouseReader.debugState().line}`);
   splitMouseReader.close();
 
@@ -325,15 +325,72 @@ function runEditorSelfTest() {
   clickReader.debugKey("/");
   const clickState = clickReader.debugState();
   const clickY = clickState.inputStartRow + (clickState.slashMenuItemStartRow ?? 0);
-  clickReader.debugKey(`\x1b[<0;2;${clickY}M`);
+  clickReader.debugData(`\x1b[<0;2;${clickY}M`);
   if (clickedLine !== "/help") throw new Error(`slash menu click did not submit first item: ${clickedLine || clickReader.debugState().line}`);
   clickReader.close();
+
+  // Test /permissions nested argument menu
+  const permInput = new FakeInput() as unknown as NodeJS.ReadStream;
+  const permOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
+  permOutput.rows = 24;
+  const permReader = new TerminalLineReader(permInput, permOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
+  let permLine = "";
+  permReader.on("line", (line) => { permLine = line; });
+  permReader.prompt();
+  for (const char of Array.from("/permissions ")) permReader.debugKey(char, { name: char === "/" ? undefined : char });
+  const permState = permReader.debugState();
+  if (permState.slashLabels.length === 0) throw new Error("permissions argument menu not shown");
+  if (!permState.slashLabels.includes("safe")) throw new Error(`permissions menu missing 'safe': ${permState.slashLabels}`);
+  const permClickY = permState.inputStartRow + (permState.slashMenuItemStartRow ?? 0) + 1;
+  permReader.debugData(`\x1b[<0;2;${permClickY}M`);
+  if (!permLine.startsWith("/permissions ")) throw new Error(`permissions click did not submit: ${permLine || permReader.debugState().line}`);
+  permReader.close();
+
+  const scrollInput = new FakeInput() as unknown as NodeJS.ReadStream;
+  const scrollOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
+  const scrollReader = new TerminalLineReader(scrollInput, scrollOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
+  scrollReader.prompt();
+  for (const char of Array.from("abc")) scrollReader.debugKey(char, { name: char });
+  scrollReader.debugData("\x1b[<64;10;5M\x1b[<65;10;5M");
+  if (scrollReader.debugState().line !== "abc") throw new Error(`scroll wheel leaked into input: ${scrollReader.debugState().line}`);
+  if (scrollReader.debugState().cursor !== 3) throw new Error(`scroll wheel moved cursor: ${scrollReader.debugState().cursor}`);
+  scrollReader.close();
+
+  // Test multiple rapid scroll events in one chunk (real Windows Terminal behavior)
+  const rapidScrollInput = new FakeInput() as unknown as NodeJS.ReadStream;
+  const rapidScrollOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
+  const rapidScrollReader = new TerminalLineReader(rapidScrollInput, rapidScrollOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
+  rapidScrollReader.prompt();
+  for (const char of Array.from("hello")) rapidScrollReader.debugKey(char, { name: char });
+  rapidScrollReader.debugData("\x1b[<64;32;23M\x1b[<64;32;23M\x1b[<65;32;23M\x1b[<65;32;23M\x1b[<64;32;23M");
+  if (rapidScrollReader.debugState().line !== "hello") throw new Error(`rapid scroll leaked: ${rapidScrollReader.debugState().line}`);
+  rapidScrollReader.close();
+
+  // Test menu scrolling: type "/" to show all commands, then arrow down past visible window
+  const menuScrollInput = new FakeInput() as unknown as NodeJS.ReadStream;
+  const menuScrollOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
+  menuScrollOutput.rows = 24;
+  const menuScrollReader = new TerminalLineReader(menuScrollInput, menuScrollOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
+  menuScrollReader.prompt();
+  menuScrollReader.debugKey("/");
+  const menuState1 = menuScrollReader.debugState();
+  const totalCommands = COMMAND_DEFS.length;
+  if (menuState1.slashLabels.length > 9) throw new Error(`menu shows more than 9 items: ${menuState1.slashLabels.length}`);
+  if (totalCommands <= 9) throw new Error(`expected more than 9 commands for scroll test, got ${totalCommands}`);
+  // Arrow down 10 times to scroll past the visible window
+  for (let i = 0; i < 10; i++) menuScrollReader.debugKey(undefined, { name: "down" });
+  const menuState2 = menuScrollReader.debugState();
+  // After scrolling, the visible labels should have changed (scrolled)
+  if (menuState2.slashLabels[0] === menuState1.slashLabels[0] && menuState2.slashLabels.length === menuState1.slashLabels.length) {
+    throw new Error("menu did not scroll after pressing down 10 times");
+  }
+  menuScrollReader.close();
 
   if (normalizeCommandInput("\\permission-model trusted") !== "/permission-model trusted") {
     throw new Error("backslash normalization failed");
   }
 
-  console.log(JSON.stringify({ ok: true, slash: true, backslash: true, nested: true, mcp_nested: true, memory_nested: true, selection_delete: true, vertical_cursor: true, mouse_swallow: true, split_mouse_swallow: true, menu_mouse_click: true }));
+  console.log(JSON.stringify({ ok: true, slash: true, backslash: true, nested: true, mcp_nested: true, memory_nested: true, selection_delete: true, vertical_cursor: true, mouse_swallow: true, split_mouse_swallow: true, menu_mouse_click: true, scroll_wheel: true, rapid_scroll: true, menu_scroll: true }));
 }
 
 interface CommandContext {
@@ -368,7 +425,7 @@ const COMMAND_DEFS = [
   { name: "sessions", args: "[n]", description: "list recent saved sessions" },
   { name: "memory", args: "<save|status>", description: "save current session summary to agentmemory" },
   { name: "retry", args: "", description: "retry the last user request after a network failure", submit: true },
-  { name: "permissions", args: "", description: "show permission model, approval, sandbox, and write-mode controls", submit: true },
+  { name: "permissions", args: "<setting>", description: "permission model, approval, sandbox, and write-mode controls" },
   { name: "permission-model", args: "<mode>", description: "choose safe, read-only, trusted, or locked safety bundles" },
   { name: "approval", args: "<mode>", description: "set shell approvals: on-request, auto, never" },
   { name: "sandbox", args: "<mode>", description: "set file-write sandbox: workspace-write, read-only, unrestricted" },
@@ -486,7 +543,8 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         printStatus(context.agent.getRuntime(), process.cwd(), context.stats());
         return true;
       case "permissions":
-        printPermissions();
+        if (!arg || arg === "status") printPermissions();
+        else console.log(applyPermissionModel(arg));
         return true;
       case "permission-model":
       case "permissions-model":
@@ -727,6 +785,13 @@ function buildSlashMenu(line: string, cursor: number): SlashMenuResult | null {
 
 function buildArgumentMenu(command: string, query: string, replaceStart: number, replaceEnd: number): SlashMenuResult | null {
   const optionGroups: Record<string, readonly { value: string; description: string }[]> = {
+    permissions: [
+      { value: "status", description: "show current permission settings" },
+      { value: "safe", description: "preview writes, workspace sandbox, approvals on-request" },
+      { value: "read-only", description: "block file writes, approvals on-request" },
+      { value: "trusted", description: "direct writes, unrestricted sandbox, approvals auto" },
+      { value: "locked", description: "preview writes, read-only sandbox, approvals never" },
+    ],
     "permission-model": PERMISSION_MODE_OPTIONS,
     "permissions-model": PERMISSION_MODE_OPTIONS,
     approval: APPROVAL_OPTIONS,

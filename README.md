@@ -114,6 +114,7 @@ DeepSeek CLI is designed to feel like a small Claude Code / Codex-style terminal
 
 - Branded startup panel with the blue pixel whale logo, model, current directory, built-in tool count, and MCP status
 - One-line `deepseek >` prompt for interactive tasks
+- Stable wrapped-line editing for long Chinese/English prompts, with Up/Down visual cursor movement and history at line boundaries
 - Visible `thinking...` and per-tool progress lines while the agent works
 - Slash commands: `/help`, `/status`, `/models`, `/model`, `/thinking`, `/approvals`, `/approve`, `/deny`, `/patches`, `/apply`, `/reject`, `/session`, `/compact`, `/clear`, `/exit`
 - `--version`, `--doctor`, and `--json --doctor` for scriptable setup checks before a live model call

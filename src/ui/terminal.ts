@@ -1,3 +1,4 @@
+import { EventEmitter } from "events";
 import * as readline from "readline";
 
 const RESET = "\x1b[0m";
@@ -48,11 +49,330 @@ function formatWhaleLogo(): string {
   ].join("\n");
 }
 
-export function createRL(): readline.Interface {
-  return readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: `${GREEN}deepseek >${RESET} `,
+const PROMPT_TEXT = "deepseek > ";
+const PROMPT = `${GREEN}${PROMPT_TEXT}${RESET}`;
+
+export interface TerminalReader {
+  prompt(): void;
+  close(): void;
+  on(event: "line", listener: (line: string) => void): this;
+  on(event: "close", listener: () => void): this;
+}
+
+export function createRL(): TerminalReader {
+  if (!process.stdin.isTTY || !process.stdout.isTTY || process.env.DEEPSEEK_LEGACY_READLINE === "1") {
+    return readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: PROMPT,
+    }) as TerminalReader;
+  }
+  return new TerminalLineReader(process.stdin, process.stdout);
+}
+
+class TerminalLineReader extends EventEmitter implements TerminalReader {
+  private chars: string[] = [];
+  private cursor = 0;
+  private active = false;
+  private currentCursorRow = 0;
+  private history: string[] = [];
+  private historyIndex: number | null = null;
+  private draft = "";
+  private readonly input: NodeJS.ReadStream;
+  private readonly output: NodeJS.WriteStream;
+  private readonly keypressHandler: (str: string | undefined, key: KeyInfo) => void;
+
+  constructor(input: NodeJS.ReadStream, output: NodeJS.WriteStream) {
+    super();
+    this.input = input;
+    this.output = output;
+    this.keypressHandler = (str, key) => this.handleKey(str, key);
+    readline.emitKeypressEvents(this.input);
+    this.input.setRawMode?.(true);
+    this.input.resume();
+    this.input.on("keypress", this.keypressHandler);
+  }
+
+  prompt(): void {
+    this.active = true;
+    this.render();
+  }
+
+  close(): void {
+    this.input.off("keypress", this.keypressHandler);
+    this.input.setRawMode?.(false);
+    this.emit("close");
+  }
+
+  private handleKey(str: string | undefined, key: KeyInfo): void {
+    if (!this.active) return;
+    if (key.ctrl && key.name === "c") {
+      this.output.write("\n");
+      this.close();
+      return;
+    }
+    if (key.ctrl && key.name === "d" && this.chars.length === 0) {
+      this.output.write("\n");
+      this.close();
+      return;
+    }
+    if (key.name === "return" || key.name === "enter") {
+      this.submitLine();
+      return;
+    }
+    if (key.name === "backspace") {
+      this.deleteBeforeCursor();
+      return;
+    }
+    if (key.name === "delete" || (key.ctrl && key.name === "d")) {
+      this.deleteAtCursor();
+      return;
+    }
+    if (key.name === "left") {
+      if (this.cursor > 0) this.cursor -= 1;
+      this.render();
+      return;
+    }
+    if (key.name === "right") {
+      if (this.cursor < this.chars.length) this.cursor += 1;
+      this.render();
+      return;
+    }
+    if (key.name === "home" || (key.ctrl && key.name === "a")) {
+      this.cursor = 0;
+      this.render();
+      return;
+    }
+    if (key.name === "end" || (key.ctrl && key.name === "e")) {
+      this.cursor = this.chars.length;
+      this.render();
+      return;
+    }
+    if (key.name === "up") {
+      if (!this.moveVertical(-1)) this.historyPrevious();
+      this.render();
+      return;
+    }
+    if (key.name === "down") {
+      if (!this.moveVertical(1)) this.historyNext();
+      this.render();
+      return;
+    }
+    if (key.ctrl && key.name === "u") {
+      this.chars.splice(0, this.cursor);
+      this.cursor = 0;
+      this.resetHistoryNavigation();
+      this.render();
+      return;
+    }
+    if (key.ctrl && key.name === "k") {
+      this.chars.splice(this.cursor);
+      this.resetHistoryNavigation();
+      this.render();
+      return;
+    }
+    if (str && !key.ctrl && !key.meta && isPrintable(str)) {
+      this.chars.splice(this.cursor, 0, ...Array.from(str));
+      this.cursor += Array.from(str).length;
+      this.resetHistoryNavigation();
+      this.render();
+    }
+  }
+
+  private submitLine(): void {
+    const line = this.chars.join("");
+    if (line && this.history[this.history.length - 1] !== line) {
+      this.history.push(line);
+    }
+    this.chars = [];
+    this.cursor = 0;
+    this.historyIndex = null;
+    this.draft = "";
+    this.active = false;
+    this.currentCursorRow = 0;
+    this.output.write("\n");
+    this.emit("line", line);
+  }
+
+  private deleteBeforeCursor(): void {
+    if (this.cursor === 0) return;
+    this.chars.splice(this.cursor - 1, 1);
+    this.cursor -= 1;
+    this.resetHistoryNavigation();
+    this.render();
+  }
+
+  private deleteAtCursor(): void {
+    if (this.cursor >= this.chars.length) return;
+    this.chars.splice(this.cursor, 1);
+    this.resetHistoryNavigation();
+    this.render();
+  }
+
+  private historyPrevious(): void {
+    if (this.history.length === 0) return;
+    if (this.historyIndex === null) {
+      this.draft = this.chars.join("");
+      this.historyIndex = this.history.length - 1;
+    } else if (this.historyIndex > 0) {
+      this.historyIndex -= 1;
+    }
+    this.setLine(this.history[this.historyIndex]);
+  }
+
+  private historyNext(): void {
+    if (this.historyIndex === null) return;
+    if (this.historyIndex < this.history.length - 1) {
+      this.historyIndex += 1;
+      this.setLine(this.history[this.historyIndex]);
+      return;
+    }
+    this.historyIndex = null;
+    this.setLine(this.draft);
+    this.draft = "";
+  }
+
+  private setLine(line: string): void {
+    this.chars = Array.from(line);
+    this.cursor = this.chars.length;
+  }
+
+  private resetHistoryNavigation(): void {
+    this.historyIndex = null;
+    this.draft = "";
+  }
+
+  private moveVertical(direction: -1 | 1): boolean {
+    const positions = this.cursorPositions();
+    const current = positions[this.cursor];
+    const last = positions[positions.length - 1];
+    const targetRow = current.row + direction;
+    if (targetRow < 0 || targetRow > last.row) return false;
+
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < positions.length; index++) {
+      const position = positions[index];
+      if (position.row !== targetRow) continue;
+      const distance = Math.abs(position.col - current.col);
+      if (distance < bestDistance || (distance === bestDistance && index > bestIndex)) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+    if (bestIndex === -1) return false;
+    this.cursor = bestIndex;
+    return true;
+  }
+
+  private render(): void {
+    if (!this.active) return;
+    readline.moveCursor(this.output, 0, -this.currentCursorRow);
+    readline.cursorTo(this.output, 0);
+    readline.clearScreenDown(this.output);
+
+    const line = this.chars.join("");
+    this.output.write(PROMPT + line);
+
+    const columns = terminalColumns(this.output);
+    const end = measureColumns(PROMPT_TEXT + line, columns);
+    const desired = measureColumns(PROMPT_TEXT + this.chars.slice(0, this.cursor).join(""), columns);
+    if (end.row > desired.row) {
+      readline.moveCursor(this.output, 0, -(end.row - desired.row));
+    }
+    readline.cursorTo(this.output, desired.col);
+    this.currentCursorRow = desired.row;
+  }
+
+  private cursorPositions(): CursorPosition[] {
+    const columns = terminalColumns(this.output);
+    const positions: CursorPosition[] = [];
+    for (let index = 0; index <= this.chars.length; index++) {
+      positions.push(measureColumns(PROMPT_TEXT + this.chars.slice(0, index).join(""), columns));
+    }
+    return positions;
+  }
+}
+
+interface KeyInfo {
+  name?: string;
+  ctrl?: boolean;
+  meta?: boolean;
+}
+
+interface CursorPosition {
+  row: number;
+  col: number;
+}
+
+function terminalColumns(output: NodeJS.WriteStream): number {
+  return Math.max(20, output.columns || 80);
+}
+
+function measureColumns(value: string, columns: number): CursorPosition {
+  let row = 0;
+  let col = 0;
+  for (const char of Array.from(value)) {
+    if (char === "\n") {
+      row += 1;
+      col = 0;
+      continue;
+    }
+    const width = charWidth(char, col);
+    if (width === 0) continue;
+    if (col + width > columns) {
+      row += 1;
+      col = 0;
+    }
+    col += width;
+    if (col >= columns) {
+      row += 1;
+      col = 0;
+    }
+  }
+  return { row, col };
+}
+
+function charWidth(char: string, col: number): number {
+  if (char === "	") return 4 - (col % 4);
+  const code = char.codePointAt(0) ?? 0;
+  if (code === 0 || code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+  if (isCombiningMark(code)) return 0;
+  return isFullWidthCodePoint(code) ? 2 : 1;
+}
+
+function isCombiningMark(code: number): boolean {
+  return (
+    (code >= 0x0300 && code <= 0x036f) ||
+    (code >= 0x1ab0 && code <= 0x1aff) ||
+    (code >= 0x1dc0 && code <= 0x1dff) ||
+    (code >= 0x20d0 && code <= 0x20ff) ||
+    (code >= 0xfe20 && code <= 0xfe2f)
+  );
+}
+
+function isFullWidthCodePoint(code: number): boolean {
+  return (
+    code >= 0x1100 &&
+    (code <= 0x115f ||
+      code === 0x2329 ||
+      code === 0x232a ||
+      (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1f64f) ||
+      (code >= 0x1f900 && code <= 0x1f9ff))
+  );
+}
+
+function isPrintable(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code >= 32 && code !== 127;
   });
 }
 
@@ -99,6 +419,10 @@ ${BOLD}DeepSeek CLI commands${RESET}
   /thinking <mode>      Switch thinking: auto, on, off, high, max
   /clear               Clear the terminal
   /exit                Quit
+
+${BOLD}Line editing${RESET}
+  Long wrapped input supports Left/Right, Home/End, Backspace/Delete, and Up/Down visual-row movement.
+  At the top or bottom visual row, Up/Down navigates command history.
 
 ${BOLD}Non-interactive${RESET}
   deepseek --models

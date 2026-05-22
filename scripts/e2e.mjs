@@ -74,6 +74,9 @@ try {
     mouse_swallow: true,
     split_mouse_swallow: true,
     menu_mouse_click: true,
+    scroll_wheel: true,
+    rapid_scroll: true,
+    menu_scroll: true,
   });
 
   const workspaceDir = mkdtempSync(join(tmpdir(), "deepseek-cli-workspace-"));
@@ -95,7 +98,7 @@ try {
       "/memory save",
       "/patches",
       "/approvals",
-      "/permissions",
+      "/permissions status",
       "/permission-model trusted",
       "/model pro",
       "/thinking max",

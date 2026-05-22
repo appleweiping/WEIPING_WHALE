@@ -36,12 +36,15 @@ export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) 
 
 function formatWhaleLogo(): string {
   return [
-    `${BLUE}        ▄▄████▄▄${RESET}        ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
-    `${BLUE}    ▄██▓▓▓▓▓▓▓▓██▄${RESET}    ${DIM}blue whale terminal agent${RESET}`,
-    `${BLUE}  ▄██▓▓  ▓▓▓▓  ▓▓██▄${RESET}  ${GREEN}>_${RESET}`,
-    `${BLUE}  ██▓▓▓▓▓▓▓▓▓▓▓▓▓██▀${RESET}`,
-    `${BLUE}   ▀██▓▓▓▓▓▓▓▓██▀  ▄${RESET}`,
-    `${BLUE}      ▀▀████▀▀   ▀██▀${RESET}`,
+    `${CYAN}             .  .  .${RESET}          ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
+    `${CYAN}          .  :  :  .${RESET}       ${DIM}blue whale terminal agent${RESET}`,
+    BLUE + "        .-\"\"\"\"\"\"-.        __" + RESET,
+    BLUE + "  .----'   o   >_   `----._/ /" + RESET,
+    BLUE + " /                         _ <" + RESET,
+    BLUE + "|                         / `-._" + RESET,
+    BLUE + " \\__                  __/      \\" + RESET,
+    BLUE + "    `--.__________.--'       __/ " + RESET,
+    CYAN + "          ~~~  ~~~  ~~~       \\__/" + RESET,
   ].join("\n");
 }
 

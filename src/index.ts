@@ -306,11 +306,34 @@ function runEditorSelfTest() {
   if (mouseReader.debugState().line !== "abc") throw new Error(`mouse sequence leaked into input: ${mouseReader.debugState().line}`);
   mouseReader.close();
 
+  const splitMouseInput = new FakeInput() as unknown as NodeJS.ReadStream;
+  const splitMouseOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
+  const splitMouseReader = new TerminalLineReader(splitMouseInput, splitMouseOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
+  splitMouseReader.prompt();
+  for (const char of Array.from("abc")) splitMouseReader.debugKey(char, { name: char });
+  for (const chunk of ["\x1b", "[", "<", "0", ";", "1", ";", "1", "M"]) splitMouseReader.debugKey(chunk);
+  if (splitMouseReader.debugState().line !== "abc") throw new Error(`split mouse sequence leaked into input: ${splitMouseReader.debugState().line}`);
+  splitMouseReader.close();
+
+  const clickInput = new FakeInput() as unknown as NodeJS.ReadStream;
+  const clickOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
+  clickOutput.rows = 24;
+  const clickReader = new TerminalLineReader(clickInput, clickOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
+  let clickedLine = "";
+  clickReader.on("line", (line) => { clickedLine = line; });
+  clickReader.prompt();
+  clickReader.debugKey("/");
+  const clickState = clickReader.debugState();
+  const clickY = clickState.inputStartRow + (clickState.slashMenuItemStartRow ?? 0);
+  clickReader.debugKey(`\x1b[<0;2;${clickY}M`);
+  if (clickedLine !== "/help") throw new Error(`slash menu click did not submit first item: ${clickedLine || clickReader.debugState().line}`);
+  clickReader.close();
+
   if (normalizeCommandInput("\\permission-model trusted") !== "/permission-model trusted") {
     throw new Error("backslash normalization failed");
   }
 
-  console.log(JSON.stringify({ ok: true, slash: true, backslash: true, nested: true, mcp_nested: true, memory_nested: true, selection_delete: true, vertical_cursor: true, mouse_swallow: true }));
+  console.log(JSON.stringify({ ok: true, slash: true, backslash: true, nested: true, mcp_nested: true, memory_nested: true, selection_delete: true, vertical_cursor: true, mouse_swallow: true, split_mouse_swallow: true, menu_mouse_click: true }));
 }
 
 interface CommandContext {

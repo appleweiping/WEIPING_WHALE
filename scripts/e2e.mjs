@@ -72,6 +72,8 @@ try {
     selection_delete: true,
     vertical_cursor: true,
     mouse_swallow: true,
+    split_mouse_swallow: true,
+    menu_mouse_click: true,
   });
 
   const workspaceDir = mkdtempSync(join(tmpdir(), "deepseek-cli-workspace-"));

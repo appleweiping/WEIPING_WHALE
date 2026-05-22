@@ -1,4 +1,4 @@
-import { EventEmitter } from "events";
+﻿import { EventEmitter } from "events";
 import * as readline from "readline";
 
 const RESET = "\x1b[0m";
@@ -38,23 +38,23 @@ export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) 
 
 function formatWhaleLogo(): string {
   return [
-    `${BLUE}${BOLD}        .-''''-.        _.-' )${RESET}      ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
-    `${BLUE}${BOLD}     .-'  .--.  '-.  .-'  .-'${RESET}      ${DIM}official blue whale inspired${RESET}`,
-    BLUE + "   .'   .'    '.   \/   .'" + RESET,
-    BLUE + "  /    /  .--.  \      /      _.--._" + RESET,
-    BLUE + " |    |  (    )  |    /   _.-'  _.-'" + RESET,
-    BLUE + " |    |   '--'   |   |_.-'   .-'" + RESET,
-    BLUE + "  \    \        /          .'" + RESET,
-    BLUE + "   '.   '.___.'    _..---'" + RESET,
-    `${BLUE}${BOLD}     '-._________.-'${RESET}  ${CYAN}deepseek${RESET}`,
+    `${BLUE}${BOLD}                 .-''''''-.        _.--.   ${RESET} ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
+    `${BLUE}${BOLD}             .-''  .--.   ''-.  .'  .-'   ${RESET} ${DIM}blue whale coding agent${RESET}`,
+    `${CYAN}   .     .   ${BLUE}${BOLD}.'    .'${RESET}${BLUE}    '.     \/  .'      ${CYAN}.  .${RESET}`,
+    `${CYAN} .   :   . ${BLUE}${BOLD}/     /${RESET}${BLUE}  .--.  \        /   _.--.  ${CYAN}:   .${RESET}`,
+    `${CYAN}   . ' .  ${BLUE}${BOLD}|    |${RESET}${BLUE}  (    )  |      /_.-'  .'  ${CYAN}. ' .${RESET}`,
+    `${BLUE}${BOLD}          |    |${RESET}${BLUE}   '--'   |          _.-'${RESET}     ${MAGENTA}${BOLD}\\/${RESET}`,
+    `${BLUE}${BOLD}           \    \${RESET}${BLUE}        /      _..-'${RESET}      ${CYAN}\/ ${BLUE}${BOLD}/\${RESET}`,
+    `${BLUE}${BOLD}            '.   '.___.'   _.-'${RESET}          ${CYAN}\___/${RESET}`,
+    `${BLUE}${BOLD}              '-._______.-'${RESET}    ${CYAN}__..--${RESET}  ${BLUE}${BOLD}deepseek${RESET}`,
   ].join("\n");
 }
-
 const PROMPT_TEXT = "\u2501\u2501 ";
 const PROMPT = `${BLUE}${BOLD}${PROMPT_TEXT}${RESET}`;
 const MAX_MENU_ITEMS = 9;
 const ENABLE_MOUSE_TRACKING = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const DISABLE_MOUSE_TRACKING = "\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+const SHOW_CURSOR = "\x1b[?25h";
 
 export interface SlashMenuContext {
   line: string;
@@ -110,6 +110,10 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
   private slashIndex = 0;
   private mouseSelecting = false;
   private inputStartRow = 1;
+  private pendingControlSequence = "";
+  private slashMenuItemStartRow: number | null = null;
+  private slashMenuMoreRow: number | null = null;
+  private slashMenuEndRow: number | null = null;
   private readonly input: NodeJS.ReadStream;
   private readonly output: NodeJS.WriteStream;
   private readonly slashMenuProvider?: SlashMenuProvider;
@@ -125,28 +129,32 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     this.input.setRawMode?.(true);
     this.input.resume();
     this.input.on("keypress", this.keypressHandler);
-    this.output.write(ENABLE_MOUSE_TRACKING);
+    this.output.write(SHOW_CURSOR + ENABLE_MOUSE_TRACKING);
   }
 
   prompt(): void {
     this.active = true;
+    this.output.write(SHOW_CURSOR);
     this.refreshSlashMenu(false);
     this.render();
   }
 
   close(): void {
     this.input.off("keypress", this.keypressHandler);
-    this.output.write(DISABLE_MOUSE_TRACKING);
+    this.output.write(SHOW_CURSOR + DISABLE_MOUSE_TRACKING);
     this.input.setRawMode?.(false);
     this.emit("close");
   }
 
-  debugState(): { line: string; cursor: number; selection: { start: number; end: number } | null; slashLabels: string[] } {
+  debugState(): { line: string; cursor: number; selection: { start: number; end: number } | null; slashLabels: string[]; slashMenuItemStartRow: number | null; slashMenuMoreRow: number | null; inputStartRow: number } {
     return {
       line: this.chars.join(""),
       cursor: this.cursor,
       selection: this.selectionRange(),
       slashLabels: this.visibleSlashItems().map((item) => item.label),
+      slashMenuItemStartRow: this.slashMenuItemStartRow,
+      slashMenuMoreRow: this.slashMenuMoreRow,
+      inputStartRow: this.inputStartRow,
     };
   }
 
@@ -157,7 +165,7 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
   private handleKey(str: string | undefined, key: KeyInfo): void {
     if (!this.active) return;
     const sequence = str ?? key.sequence ?? "";
-    if (!key.name && this.handleMouseSequence(sequence)) return;
+    if (this.handleControlSequence(sequence, key)) return;
     if (key.ctrl && key.name === "c") {
       this.output.write("\n");
       this.close();
@@ -389,7 +397,53 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     return true;
   }
 
+  private handleControlSequence(sequence: string, key: KeyInfo): boolean {
+    if (this.pendingControlSequence) {
+      this.pendingControlSequence += sequence;
+      if (this.tryHandlePendingControlSequence()) return true;
+      if (this.pendingControlSequence.length > 64) this.pendingControlSequence = "";
+      return true;
+    }
+    if (!sequence) return false;
+    if (sequence === "\x1b" && !key.name) {
+      this.pendingControlSequence = sequence;
+      return true;
+    }
+    if (!key.name && sequence.startsWith("\x1b")) {
+      if (this.isPartialMouseSequence(sequence)) {
+        this.pendingControlSequence = sequence;
+        return true;
+      }
+      return this.handleMouseSequence(sequence);
+    }
+    return false;
+  }
+
+  private tryHandlePendingControlSequence(): boolean {
+    if (this.isPartialMouseSequence(this.pendingControlSequence)) return true;
+    if (this.isCompleteMouseSequence(this.pendingControlSequence) && this.handleMouseSequence(this.pendingControlSequence)) {
+      this.pendingControlSequence = "";
+      return true;
+    }
+    if (this.pendingControlSequence.startsWith("\x1b")) {
+      this.pendingControlSequence = "";
+      return true;
+    }
+    return false;
+  }
+
+  private isPartialMouseSequence(sequence: string): boolean {
+    return /^\x1b(?:\[|\[<|\[<\d+(?:;\d*){0,2})?$/.test(sequence);
+  }
+
+  private isCompleteMouseSequence(sequence: string): boolean {
+    return /^\x1b\[<\d+;\d+;\d+[mM]$/.test(sequence) || (sequence.startsWith("\x1b[M") && sequence.length >= 6);
+  }
+
   private applyMouseEvent(code: number, x: number, y: number, suffix: "m" | "M", isSgr: boolean): void {
+    if (suffix === "M" && this.isPrimaryMousePress(code)) {
+      if (this.handleSlashMenuClick(y)) return;
+    }
     const index = this.cursorIndexFromTerminalCell(x, y);
     if (index === null) return;
     if (suffix === "M" && (code & 32) === 0) {
@@ -407,6 +461,27 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     }
     this.refreshSlashMenu(true);
     this.render();
+  }
+
+  private isPrimaryMousePress(code: number): boolean {
+    return (code & 32) === 0 && (code & 64) === 0 && (code & 3) === 0;
+  }
+
+  private handleSlashMenuClick(y: number): boolean {
+    if (!this.slashMenu || this.slashMenuItemStartRow === null || this.slashMenuEndRow === null) return false;
+    const targetRow = y - this.inputStartRow;
+    if (targetRow < this.slashMenuItemStartRow || targetRow > this.slashMenuEndRow) return false;
+    const index = targetRow - this.slashMenuItemStartRow;
+    const items = this.visibleSlashItems();
+    if (index >= 0 && index < items.length) {
+      this.slashIndex = index;
+      this.acceptSlashSelection();
+      return true;
+    }
+    if (this.slashMenuMoreRow !== null && targetRow === this.slashMenuMoreRow) {
+      return true;
+    }
+    return true;
   }
 
   private cursorIndexFromTerminalCell(x: number, y: number): number | null {
@@ -496,7 +571,6 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     readline.clearScreenDown(this.output);
 
     const line = this.chars.join("");
-    this.inputStartRow = (this.output.rows || 24) - this.currentCursorRow;
     this.output.write(PROMPT + this.renderLineWithSelection(line));
 
     const columns = terminalColumns(this.output);
@@ -504,6 +578,7 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     const footerRows = this.renderSlashMenu(columns, end.row);
     const desired = measureColumns(PROMPT_TEXT + this.chars.slice(0, this.cursor).join(""), columns);
     const renderedBottomRow = end.row + footerRows;
+    this.inputStartRow = Math.max(1, (this.output.rows || 24) - renderedBottomRow);
     if (renderedBottomRow > desired.row) {
       readline.moveCursor(this.output, 0, -(renderedBottomRow - desired.row));
     }
@@ -523,7 +598,10 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
     return output;
   }
 
-  private renderSlashMenu(columns: number, _inputEndRow: number): number {
+  private renderSlashMenu(columns: number, inputEndRow: number): number {
+    this.slashMenuItemStartRow = null;
+    this.slashMenuMoreRow = null;
+    this.slashMenuEndRow = null;
     if (!this.slashMenu) return 0;
     const items = this.visibleSlashItems();
     if (items.length === 0) return 0;
@@ -538,8 +616,11 @@ export class TerminalLineReader extends EventEmitter implements TerminalReader {
       lines.push(truncateDisplay(raw, width));
     }
     if ((this.slashMenu.items.length ?? 0) > items.length) {
-      lines.push(`${DIM}  ... ${this.slashMenu.items.length - items.length} more, keep typing to filter${RESET}`);
+      lines.push(`${DIM}    keep typing to filter ${this.slashMenu.items.length - items.length} more commands${RESET}`);
+      this.slashMenuMoreRow = inputEndRow + 2 + items.length;
     }
+    this.slashMenuItemStartRow = inputEndRow + 2;
+    this.slashMenuEndRow = inputEndRow + lines.length;
     this.output.write("\n" + lines.join("\n"));
     return lines.length;
   }

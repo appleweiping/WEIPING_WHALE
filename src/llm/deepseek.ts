@@ -1,6 +1,7 @@
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
+  reasoning_content?: string | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
@@ -30,6 +31,7 @@ export interface CompletionOptions {
 
 export interface CompletionResult {
   content: string | null;
+  reasoning_content: string | null;
   tool_calls: ToolCall[];
   usage: { prompt_tokens: number; completion_tokens: number };
 }
@@ -42,6 +44,8 @@ export class DeepSeekClient {
   private model: string;
   private defaultTemp: number;
   private defaultMaxTokens: number;
+  private thinking: "auto" | "enabled" | "disabled";
+  private reasoningEffort: "high" | "max";
 
   constructor(opts: {
     base_url: string;
@@ -49,26 +53,48 @@ export class DeepSeekClient {
     model: string;
     temperature: number;
     max_tokens: number;
+    thinking: "auto" | "enabled" | "disabled";
+    reasoning_effort: "high" | "max";
   }) {
     this.baseUrl = opts.base_url.replace(/\/+$/, "");
     this.apiKey = opts.api_key;
     this.model = opts.model;
     this.defaultTemp = opts.temperature;
     this.defaultMaxTokens = opts.max_tokens;
+    this.thinking = opts.thinking;
+    this.reasoningEffort = opts.reasoning_effort;
+  }
+
+  setModel(model: string) {
+    this.model = model;
+  }
+
+  getModel(): string {
+    return this.model;
+  }
+
+  setThinking(thinking: "auto" | "enabled" | "disabled", reasoningEffort = this.reasoningEffort) {
+    this.thinking = thinking;
+    this.reasoningEffort = reasoningEffort;
+  }
+
+  getThinking(): { mode: "auto" | "enabled" | "disabled"; effort: "high" | "max" } {
+    return { mode: this.thinking, effort: this.reasoningEffort };
   }
 
   async complete(opts: CompletionOptions): Promise<CompletionResult> {
     const body: any = {
       model: this.model,
-      messages: opts.messages,
+      messages: this.serializeMessages(opts.messages),
       temperature: opts.temperature ?? this.defaultTemp,
       max_tokens: opts.max_tokens ?? this.defaultMaxTokens,
     };
 
     if (opts.tools && opts.tools.length > 0) {
       body.tools = opts.tools;
-      body.tool_choice = "auto";
     }
+
+    this.applyThinkingParams(body);
 
     const res = await this.fetchWithRetry(`${this.baseUrl}/chat/completions`, {
       method: "POST",
@@ -90,6 +116,7 @@ export class DeepSeekClient {
 
     return {
       content: choice.message?.content ?? null,
+      reasoning_content: choice.message?.reasoning_content ?? null,
       tool_calls: choice.message?.tool_calls ?? [],
       usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
     };
@@ -98,7 +125,7 @@ export class DeepSeekClient {
   async *stream(opts: CompletionOptions): AsyncGenerator<string> {
     const body: any = {
       model: this.model,
-      messages: opts.messages,
+      messages: this.serializeMessages(opts.messages),
       temperature: opts.temperature ?? this.defaultTemp,
       max_tokens: opts.max_tokens ?? this.defaultMaxTokens,
       stream: true,
@@ -106,8 +133,9 @@ export class DeepSeekClient {
 
     if (opts.tools && opts.tools.length > 0) {
       body.tools = opts.tools;
-      body.tool_choice = "auto";
     }
+
+    this.applyThinkingParams(body);
 
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
@@ -169,5 +197,27 @@ export class DeepSeekClient {
       }
     }
     throw new Error("Max retries exceeded");
+  }
+
+  private applyThinkingParams(body: Record<string, any>) {
+    const thinkingType = this.thinking === "auto" ? "enabled" : this.thinking;
+    body.thinking = { type: thinkingType };
+    if (thinkingType === "enabled") {
+      delete body.temperature;
+      body.reasoning_effort = this.reasoningEffort;
+    }
+  }
+
+  private serializeMessages(messages: Message[]): Message[] {
+    return messages.map((message) => {
+      const serialized: Message = { ...message };
+      if (this.thinking !== "disabled" && serialized.role === "assistant" && serialized.tool_calls?.length && serialized.reasoning_content == null) {
+        serialized.reasoning_content = "";
+      }
+      if (serialized.reasoning_content == null || this.thinking === "disabled") {
+        delete serialized.reasoning_content;
+      }
+      return serialized;
+    });
   }
 }

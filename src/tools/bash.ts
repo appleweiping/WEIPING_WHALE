@@ -18,17 +18,16 @@ registerTool(
     return new Promise((resolve) => {
       const proc = spawn(isWindows ? "powershell.exe" : "bash", isWindows ? ["-NoProfile", "-Command", command] : ["-c", command], {
         timeout,
-        maxBuffer: 1024 * 1024,
         shell: false,
       });
 
       let stdout = "";
       let stderr = "";
 
-      proc.stdout?.on("data", (d) => (stdout += d.toString()));
-      proc.stderr?.on("data", (d) => (stderr += d.toString()));
+      proc.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+      proc.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
 
-      proc.on("close", (code) => {
+      proc.on("close", (code: number | null) => {
         const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : "");
         resolve({
           output: output.slice(0, 50000) || `(exit code ${code})`,
@@ -36,7 +35,7 @@ registerTool(
         });
       });
 
-      proc.on("error", (err) => {
+      proc.on("error", (err: Error) => {
         resolve({ output: `Error: ${err.message}`, error: true });
       });
     });

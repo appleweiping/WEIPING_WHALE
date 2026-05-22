@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadConfig } from "./config.js";
+import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig } from "./config.js";
 import { Agent } from "./agent.js";
 import { MCPManager } from "./mcp/manager.js";
 import { getToolDefs } from "./tools/registry.js";
@@ -10,6 +10,7 @@ import {
   printError,
   printHelp,
   printInfo,
+  printRuntimeUpdated,
   printStatus,
   printThinking,
   printToolEnd,
@@ -22,20 +23,56 @@ import "./tools/file-read.js";
 import "./tools/file-write.js";
 import "./tools/glob.js";
 
+const VERSION = "0.1.0";
+
 async function main() {
   const args = process.argv.slice(2);
+  const json = args.includes("--json");
+
+  if (args.includes("--version") || args.includes("-v")) {
+    console.log(VERSION);
+    process.exit(0);
+  }
+
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
     process.exit(0);
   }
 
-  const taskIdx = args.indexOf("-t");
-  const task = taskIdx !== -1 ? args[taskIdx + 1] : null;
+  let cwdOverride: string | undefined;
+  try {
+    cwdOverride = readFlag(args, "--cwd") ?? readFlag(args, "--workspace");
+    if (cwdOverride) changeDirectory(cwdOverride);
+  } catch (err: any) {
+    printCliError(err.message, json);
+    process.exit(1);
+  }
+
+  if (args.includes("--models")) {
+    printModels(json);
+    process.exit(0);
+  }
+
+  const task = readFlag(args, "-t") ?? readFlag(args, "--task") ?? readPositionalTask(args);
 
   const config = loadConfig();
+  if (!cwdOverride && config.agent.workspace && config.agent.workspace !== ".") {
+    try {
+      changeDirectory(config.agent.workspace);
+    } catch (err: any) {
+      printCliError(err.message, json);
+      process.exit(1);
+    }
+  }
+  try {
+    applyRuntimeOverrides(config, parseRuntimeArgs(args));
+  } catch (err: any) {
+    printCliError(err.message, json);
+    process.exit(1);
+  }
 
   if (args.includes("--doctor")) {
-    printDoctor(config);
+    printDoctor(config, json);
     process.exit(config.llm.api_key ? 0 : 1);
   }
 
@@ -56,19 +93,23 @@ async function main() {
     mcpServerCount: mcpManager.getServerCount(),
   });
   const events = {
-    onThinking: printThinking,
-    onToolStart: printToolStart,
-    onToolEnd: printToolEnd,
+    onThinking: json ? undefined : printThinking,
+    onToolStart: json ? undefined : printToolStart,
+    onToolEnd: json ? undefined : printToolEnd,
   };
 
   if (task) {
     const reply = await agent.run(task, events);
-    printAssistant(reply);
+    if (json) {
+      console.log(JSON.stringify({ ok: true, ...agent.getRuntime(), output: reply }, null, 2));
+    } else {
+      printAssistant(reply);
+    }
     mcpManager.disconnectAll();
     process.exit(0);
   }
 
-  banner(config.llm.model, process.cwd(), stats());
+  banner(agent.getRuntime(), process.cwd(), stats());
 
   const rl = createRL();
   rl.prompt();
@@ -85,14 +126,45 @@ async function main() {
       rl.prompt();
       return;
     }
+    if (input === "/models") {
+      printModels(false);
+      rl.prompt();
+      return;
+    }
     if (input === "/status") {
-      printStatus(config.llm.model, process.cwd(), stats());
+      printStatus(agent.getRuntime(), process.cwd(), stats());
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/model")) {
+      const [, model] = input.split(/\s+/, 2);
+      if (!model) {
+        printError("Usage: /model <pro|flash|chat|reasoner|model-name>");
+      } else {
+        agent.setModel(model);
+        printRuntimeUpdated(agent.getRuntime());
+      }
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/thinking")) {
+      const [, thinking, effort] = input.split(/\s+/, 3);
+      if (!thinking) {
+        printError("Usage: /thinking <auto|on|off|high|max>");
+      } else {
+        try {
+          agent.setThinking(thinking, effort);
+          printRuntimeUpdated(agent.getRuntime());
+        } catch (err: any) {
+          printError(`Error: ${err.message}`);
+        }
+      }
       rl.prompt();
       return;
     }
     if (input === "/clear") {
       console.clear();
-      banner(config.llm.model, process.cwd(), stats());
+      banner(agent.getRuntime(), process.cwd(), stats());
       rl.prompt();
       return;
     }
@@ -122,17 +194,105 @@ main().catch((err) => {
   process.exit(1);
 });
 
-function printDoctor(config: ReturnType<typeof loadConfig>) {
+function printDoctor(config: ReturnType<typeof loadConfig>, json = false) {
   const configuredMcpServers = Object.keys(config.mcp_servers).length;
   const hasApiKey = Boolean(config.llm.api_key);
   const payload = {
     ok: hasApiKey,
+    version: VERSION,
     model: config.llm.model,
+    thinking: config.llm.thinking,
+    reasoning_effort: config.llm.reasoning_effort,
     base_url: config.llm.base_url,
-    api_key: hasApiKey ? "configured" : "missing",
+    config_path: config.config_path ?? null,
+    auth: {
+      api_key: hasApiKey ? "configured" : "missing",
+      source: process.env.DEEPSEEK_API_KEY ? "env" : config.llm.api_key ? "config" : "missing",
+    },
     cwd: process.cwd(),
     mcp_servers: configuredMcpServers,
     builtin_tools: getToolDefs().map((tool) => tool.function.name),
   };
+  if (json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
   console.log(JSON.stringify(payload, null, 2));
+}
+
+function printModels(json = false) {
+  const payload = {
+    models: MODEL_PRESETS,
+    aliases: {
+      chat: "deepseek-v4-flash + thinking disabled",
+      reasoner: "deepseek-v4-flash + thinking enabled",
+      "deepseek-chat": "deepseek-v4-flash + thinking disabled",
+      "deepseek-reasoner": "deepseek-v4-flash + thinking enabled",
+    },
+  };
+  if (json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  console.log("Available DeepSeek model presets:\n");
+  for (const preset of MODEL_PRESETS) {
+    console.log(`  ${preset.name.padEnd(20)} ${preset.model.padEnd(22)} thinking=${preset.thinking}`);
+    console.log(`  ${"".padEnd(20)} ${preset.description}`);
+  }
+  console.log("\nAliases: chat, reasoner, deepseek-chat, deepseek-reasoner");
+}
+
+function parseRuntimeArgs(args: string[]) {
+  return {
+    model: readFlag(args, "--model") ?? readFlag(args, "-m"),
+    thinking: readFlag(args, "--thinking"),
+    reasoning_effort: readFlag(args, "--reasoning-effort"),
+  };
+}
+
+function readFlag(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  if (index === -1) {
+    const prefix = `${name}=`;
+    const inline = args.find((arg) => arg.startsWith(prefix));
+    if (!inline) return undefined;
+    const value = inline.slice(prefix.length);
+    if (!value) throw new Error(`${name} requires a value`);
+    return value;
+  }
+  const value = args[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${name} requires a value`);
+  }
+  return value;
+}
+
+function readPositionalTask(args: string[]): string | null {
+  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace"]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (valueFlags.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--") || arg.startsWith("-")) continue;
+    return args.slice(i).join(" ");
+  }
+  return null;
+}
+
+function printCliError(message: string, json = false) {
+  if (json) {
+    console.error(JSON.stringify({ ok: false, error: { message } }, null, 2));
+    return;
+  }
+  printError(`Error: ${message}`);
+}
+
+function changeDirectory(path: string) {
+  try {
+    process.chdir(path);
+  } catch (err: any) {
+    throw new Error(`Cannot use cwd ${path}: ${err.message}`);
+  }
 }

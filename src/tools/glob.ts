@@ -1,4 +1,5 @@
 import fg from "fast-glob";
+import { readFileSync } from "fs";
 import { spawn } from "child_process";
 import { registerTool } from "./registry.js";
 
@@ -62,8 +63,36 @@ registerTool(
       });
 
       proc.on("error", () => {
-        resolve({ output: "ripgrep (rg) not found in PATH", error: true });
+        fallbackGrep(pattern, path || ".", fileGlob)
+          .then(resolve)
+          .catch((err: any) => resolve({ output: `grep fallback failed: ${err.message}`, error: true }));
       });
     });
   }
 );
+
+async function fallbackGrep(pattern: string, searchPath: string, fileGlob?: string) {
+  const regex = new RegExp(pattern);
+  const files = await fg(fileGlob || "**/*", {
+    cwd: searchPath,
+    ignore: ["**/node_modules/**", "**/.git/**"],
+    onlyFiles: true,
+    absolute: true,
+  });
+  const matches: string[] = [];
+  for (const file of files.slice(0, 2000)) {
+    let content: string;
+    try {
+      content = readFileSync(file, "utf-8");
+    } catch {
+      continue;
+    }
+    const lines = content.split("\n");
+    for (let index = 0; index < lines.length; index++) {
+      if (regex.test(lines[index])) matches.push(`${file}:${index + 1}:${lines[index]}`);
+      if (matches.length >= 300) break;
+    }
+    if (matches.length >= 300) break;
+  }
+  return { output: matches.length ? matches.join("\n").slice(0, 30000) : "No matches found" };
+}

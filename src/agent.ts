@@ -1,7 +1,12 @@
 import { DeepSeekClient, type Message, type ToolDef, type ToolCall } from "./llm/deepseek.js";
-import { getToolDefs, getTool } from "./tools/registry.js";
+import { getToolDefs, getTool, registerTool } from "./tools/registry.js";
 import { MCPManager } from "./mcp/manager.js";
-import type { Config } from "./config.js";
+import {
+  applyModelOverride,
+  applyThinkingOverride,
+  normalizeReasoningEffort,
+  type Config,
+} from "./config.js";
 
 const SYSTEM_PROMPT = `You are DeepSeek CLI, an interactive coding agent running in the user's terminal.
 You can read/write files, execute commands, and search code to help the user with software engineering tasks.
@@ -11,16 +16,45 @@ When you have MCP tools available (prefixed with mcp_), use them as appropriate.
 export class Agent {
   private client: DeepSeekClient;
   private mcpManager: MCPManager;
+  private config: Config;
   private messages: Message[] = [];
   private maxIterations: number;
 
   constructor(config: Config, mcpManager: MCPManager) {
+    this.config = config;
     this.client = new DeepSeekClient(config.llm);
     this.mcpManager = mcpManager;
     this.maxIterations = config.agent.max_iterations;
 
-    const systemPrompt = config.agent.system_prompt || SYSTEM_PROMPT;
+    this.registerRuntimeTool();
+
+    const systemPrompt = `${config.agent.system_prompt || SYSTEM_PROMPT}\n\n${RUNTIME_SWITCHING_PROMPT}`;
     this.messages.push({ role: "system", content: systemPrompt });
+  }
+
+  setModel(model: string): string {
+    applyModelOverride(this.config, model);
+    const resolvedModel = this.config.llm.model;
+    this.client.setModel(resolvedModel);
+    this.client.setThinking(this.config.llm.thinking, this.config.llm.reasoning_effort);
+    return resolvedModel;
+  }
+
+  setThinking(thinking: string, reasoningEffort?: string): { mode: string; effort: string } {
+    applyThinkingOverride(this.config, thinking);
+    if (reasoningEffort) {
+      this.config.llm.reasoning_effort = normalizeReasoningEffort(reasoningEffort);
+    }
+    this.client.setThinking(this.config.llm.thinking, this.config.llm.reasoning_effort);
+    return this.client.getThinking();
+  }
+
+  getRuntime() {
+    return {
+      model: this.client.getModel(),
+      thinking: this.client.getThinking().mode,
+      reasoning_effort: this.client.getThinking().effort,
+    };
   }
 
   async run(userMessage: string, events: AgentEvents = {}): Promise<string> {
@@ -37,13 +71,18 @@ export class Agent {
 
       if (result.tool_calls.length === 0) {
         const reply = result.content || "";
-        this.messages.push({ role: "assistant", content: reply });
+        this.messages.push({
+          role: "assistant",
+          content: reply,
+          reasoning_content: result.reasoning_content,
+        });
         return reply;
       }
 
       this.messages.push({
         role: "assistant",
-        content: result.content,
+        content: result.content || "",
+        reasoning_content: result.reasoning_content,
         tool_calls: result.tool_calls,
       });
 
@@ -88,7 +127,56 @@ export class Agent {
     events.onToolEnd?.(name, Date.now() - startedAt, Boolean(result.error));
     return result.output;
   }
+
+  private registerRuntimeTool() {
+    registerTool(
+      "configure_deepseek_runtime",
+      "Switch the DeepSeek model and thinking mode for subsequent calls. Use this before harder reasoning tasks or switch back to flash/chat for routine work.",
+      {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Model or alias: pro, flash, chat, reasoner, or a full DeepSeek model name",
+          },
+          thinking: {
+            type: "string",
+            enum: ["auto", "enabled", "disabled", "high", "max"],
+            description: "Thinking mode. high/max enable thinking and set reasoning effort.",
+          },
+          reasoning_effort: {
+            type: "string",
+            enum: ["high", "max"],
+            description: "Reasoning effort when thinking is enabled.",
+          },
+        },
+      },
+      async ({ model, thinking, reasoning_effort }) => {
+        try {
+          if (typeof model === "string" && model.trim()) {
+            this.setModel(model);
+          }
+          if (typeof thinking === "string" && thinking.trim()) {
+            this.setThinking(thinking, typeof reasoning_effort === "string" ? reasoning_effort : undefined);
+          } else if (typeof reasoning_effort === "string" && reasoning_effort.trim()) {
+            this.config.llm.reasoning_effort = normalizeReasoningEffort(reasoning_effort);
+            this.client.setThinking(this.config.llm.thinking, this.config.llm.reasoning_effort);
+          }
+          return { output: JSON.stringify(this.getRuntime()) };
+        } catch (err: any) {
+          return { output: `Error: ${err.message}`, error: true };
+        }
+      }
+    );
+  }
 }
+
+const RUNTIME_SWITCHING_PROMPT = `Runtime switching:
+- You may call configure_deepseek_runtime to switch between pro/flash/chat/reasoner and thinking modes.
+- Use flash or chat for routine text, search, and simple file tasks.
+- Use pro or enabled thinking for complex debugging, architecture review, or multi-step reasoning.
+- The official V4 matrix supports both pro and flash with thinking enabled or disabled.
+- Switch only when it materially improves quality or cost; otherwise keep the current runtime.`;
 
 export interface AgentEvents {
   onThinking?: (iteration: number) => void;

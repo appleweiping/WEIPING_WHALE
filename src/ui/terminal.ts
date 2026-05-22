@@ -9,18 +9,25 @@ const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 const MAGENTA = "\x1b[35m";
 
+export interface RuntimeStatus {
+  model: string;
+  thinking: string;
+  reasoning_effort: string;
+}
+
 export interface BannerStats {
   toolCount: number;
   mcpServerCount: number;
 }
 
-export function banner(model: string, cwd: string, stats: BannerStats) {
-  console.log(`${CYAN}${BOLD}╭────────────────────────────────────────────╮${RESET}`);
-  console.log(`${CYAN}${BOLD}│${RESET} ${MAGENTA}${BOLD}deepseek${RESET} ${BOLD}CLI${RESET}  ${DIM}Claude Code / Codex style${RESET} ${CYAN}${BOLD}│${RESET}`);
-  console.log(`${CYAN}${BOLD}│${RESET} model ${GREEN}${pad(model, 35)}${RESET}${CYAN}${BOLD}│${RESET}`);
-  console.log(`${CYAN}${BOLD}│${RESET} cwd   ${DIM}${pad(shorten(cwd, 35), 35)}${RESET}${CYAN}${BOLD}│${RESET}`);
-  console.log(`${CYAN}${BOLD}│${RESET} tools ${YELLOW}${pad(`${stats.toolCount} total, ${stats.mcpServerCount} MCP`, 35)}${RESET}${CYAN}${BOLD}│${RESET}`);
-  console.log(`${CYAN}${BOLD}╰────────────────────────────────────────────╯${RESET}`);
+export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) {
+  console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
+  console.log(`${CYAN}${BOLD}|${RESET} ${MAGENTA}${BOLD}deepseek${RESET} ${BOLD}CLI${RESET}  ${DIM}Claude Code / Codex style${RESET}       ${CYAN}${BOLD}|${RESET}`);
+  console.log(`${CYAN}${BOLD}|${RESET} model    ${GREEN}${pad(runtime.model, 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
+  console.log(`${CYAN}${BOLD}|${RESET} thinking ${YELLOW}${pad(formatThinking(runtime), 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
+  console.log(`${CYAN}${BOLD}|${RESET} cwd      ${DIM}${pad(shorten(cwd, 36), 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
+  console.log(`${CYAN}${BOLD}|${RESET} tools    ${YELLOW}${pad(`${stats.toolCount} total, ${stats.mcpServerCount} MCP`, 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
+  console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
   console.log(`${DIM}Type /help for commands, /status for runtime info, /exit to quit.${RESET}`);
   console.log();
 }
@@ -29,7 +36,7 @@ export function createRL(): readline.Interface {
   return readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${GREEN}deepseek ›${RESET} `,
+    prompt: `${GREEN}deepseek >${RESET} `,
   });
 }
 
@@ -55,31 +62,50 @@ export function printToolStart(name: string, args: Record<string, any>) {
 
 export function printToolEnd(name: string, elapsedMs: number, error?: boolean) {
   const status = error ? `${RED}failed${RESET}` : `${GREEN}done${RESET}`;
-  process.stderr.write(`${DIM}└─ ${name} ${status} in ${elapsedMs}ms${RESET}\n`);
+  process.stderr.write(`${DIM}  ${name} ${status} in ${elapsedMs}ms${RESET}\n`);
 }
 
 export function printHelp() {
   console.log(`
 ${BOLD}DeepSeek CLI commands${RESET}
-  /help       Show this help
-  /status     Show model, cwd, tools, and MCP server counts
-  /clear      Clear the terminal
-  /exit       Quit
+  /help                Show this help
+  /status              Show model, thinking, cwd, tools, and MCP server counts
+  /models              List model presets and compatibility aliases
+  /model <name>         Switch model: pro, flash, chat, reasoner, or full model name
+  /thinking <mode>      Switch thinking: auto, on, off, high, max
+  /clear               Clear the terminal
+  /exit                Quit
 
 ${BOLD}Non-interactive${RESET}
+  deepseek --models
+  deepseek --json --doctor
+  deepseek --cwd path/to/repo -t "inspect this project"
   deepseek -t "summarize this repo"
-  deepseek --doctor
+  deepseek --model pro --thinking on -t "review this PR"
+  deepseek --model flash --thinking off --doctor
 `);
 }
 
-export function printStatus(model: string, cwd: string, stats: BannerStats) {
+export function printStatus(runtime: RuntimeStatus, cwd: string, stats: BannerStats) {
   console.log(`
 ${BOLD}Status${RESET}
-  model: ${model}
-  cwd:   ${cwd}
-  tools: ${stats.toolCount}
-  mcp:   ${stats.mcpServerCount} server(s)
+  model:            ${runtime.model}
+  thinking:         ${runtime.thinking}
+  reasoning_effort: ${runtime.reasoning_effort}
+  cwd:              ${cwd}
+  tools:            ${stats.toolCount}
+  mcp:              ${stats.mcpServerCount} server(s)
 `);
+}
+
+export function printRuntimeUpdated(runtime: RuntimeStatus) {
+  console.log(`${DIM}runtime: ${runtime.model}, thinking=${runtime.thinking}, reasoning_effort=${runtime.reasoning_effort}${RESET}`);
+}
+
+function formatThinking(runtime: RuntimeStatus): string {
+  return runtime.thinking === "enabled"
+    ? `${runtime.thinking}, ${runtime.reasoning_effort}`
+    : runtime.thinking;
 }
 
 function pad(value: string, width: number): string {
@@ -88,7 +114,7 @@ function pad(value: string, width: number): string {
 
 function shorten(value: string, width: number): string {
   if (value.length <= width) return value;
-  return `…${value.slice(value.length - width + 1)}`;
+  return `...${value.slice(value.length - width + 3)}`;
 }
 
 function summarizeArgs(args: Record<string, any>): string {

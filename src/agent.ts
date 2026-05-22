@@ -57,6 +57,33 @@ export class Agent {
     };
   }
 
+  getMessages(): Message[] {
+    return this.messages;
+  }
+
+  restoreMessages(messages: Message[]) {
+    this.messages = messages;
+  }
+
+  compactContext(keepRecent = 12): string {
+    if (this.messages.length <= keepRecent + 1) {
+      return "Context is already compact.";
+    }
+    const system = this.messages[0];
+    const oldMessages = this.messages.slice(1, -keepRecent);
+    const recent = this.messages.slice(-keepRecent);
+    const summary = summarizeMessages(oldMessages);
+    this.messages = [
+      system,
+      {
+        role: "system",
+        content: `Conversation summary before compaction:\n${summary}`,
+      },
+      ...recent,
+    ];
+    return `Compacted ${oldMessages.length} messages; kept ${recent.length} recent messages.`;
+  }
+
   async run(userMessage: string, events: AgentEvents = {}): Promise<string> {
     this.messages.push({ role: "user", content: userMessage });
 
@@ -177,6 +204,17 @@ const RUNTIME_SWITCHING_PROMPT = `Runtime switching:
 - Use pro or enabled thinking for complex debugging, architecture review, or multi-step reasoning.
 - The official V4 matrix supports both pro and flash with thinking enabled or disabled.
 - Switch only when it materially improves quality or cost; otherwise keep the current runtime.`;
+
+function summarizeMessages(messages: Message[]): string {
+  return messages
+    .map((message, index) => {
+      const content = message.content || "";
+      const toolCalls = message.tool_calls?.map((call) => call.function.name).join(", ");
+      const suffix = toolCalls ? ` tool_calls=[${toolCalls}]` : "";
+      return `${index + 1}. ${message.role}${suffix}: ${content.slice(0, 500)}`;
+    })
+    .join("\n");
+}
 
 export interface AgentEvents {
   onThinking?: (iteration: number) => void;

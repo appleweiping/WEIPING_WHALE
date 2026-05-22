@@ -1,10 +1,12 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { registerTool } from "./registry.js";
+import { createFilePatch, formatPatchCreated, getWriteMode } from "../safety/patches.js";
+import { assertWritablePath } from "../safety/sandbox.js";
 
 registerTool(
   "write_file",
-  "Create or overwrite a file with the given content.",
+  "Create or overwrite a file. By default this creates a patch preview that must be applied by the user.",
   {
     type: "object",
     properties: {
@@ -16,6 +18,11 @@ registerTool(
   async ({ path, content }) => {
     const abs = resolve(path);
     try {
+      assertWritablePath(abs);
+      if (getWriteMode() === "preview") {
+        const patch = createFilePatch("write", abs, content);
+        return { output: formatPatchCreated(patch) };
+      }
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, content, "utf-8");
       return { output: `Written ${content.length} chars to ${abs}` };
@@ -27,7 +34,7 @@ registerTool(
 
 registerTool(
   "edit_file",
-  "Replace an exact string in a file with a new string. The old_string must match exactly.",
+  "Replace an exact string in a file. By default this creates a patch preview that must be applied by the user.",
   {
     type: "object",
     properties: {
@@ -43,15 +50,21 @@ registerTool(
       return { output: `File not found: ${abs}`, error: true };
     }
     try {
+      assertWritablePath(abs);
       const content = readFileSync(abs, "utf-8");
       if (!content.includes(old_string)) {
         return { output: "old_string not found in file", error: true };
       }
       const count = content.split(old_string).length - 1;
       if (count > 1) {
-        return { output: `old_string found ${count} times — must be unique`, error: true };
+        return { output: `old_string found ${count} times; must be unique`, error: true };
       }
-      writeFileSync(abs, content.replace(old_string, new_string), "utf-8");
+      const updated = content.replace(old_string, new_string);
+      if (getWriteMode() === "preview") {
+        const patch = createFilePatch("edit", abs, updated);
+        return { output: formatPatchCreated(patch) };
+      }
+      writeFileSync(abs, updated, "utf-8");
       return { output: `Edited ${abs}` };
     } catch (err: any) {
       return { output: `Error: ${err.message}`, error: true };

@@ -4,6 +4,7 @@ const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 const CYAN = "\x1b[36m";
+const BLUE = "\x1b[34m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
@@ -21,6 +22,7 @@ export interface BannerStats {
 }
 
 export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) {
+  console.log(formatWhaleLogo());
   console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
   console.log(`${CYAN}${BOLD}|${RESET} ${MAGENTA}${BOLD}deepseek${RESET} ${BOLD}CLI${RESET}  ${DIM}Claude Code / Codex style${RESET}       ${CYAN}${BOLD}|${RESET}`);
   console.log(`${CYAN}${BOLD}|${RESET} model    ${GREEN}${pad(runtime.model, 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
@@ -30,6 +32,17 @@ export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) 
   console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
   console.log(`${DIM}Type /help for commands, /status for runtime info, /exit to quit.${RESET}`);
   console.log();
+}
+
+function formatWhaleLogo(): string {
+  return [
+    `${BLUE}        ▄▄████▄▄${RESET}        ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
+    `${BLUE}    ▄██▓▓▓▓▓▓▓▓██▄${RESET}    ${DIM}blue whale terminal agent${RESET}`,
+    `${BLUE}  ▄██▓▓  ▓▓▓▓  ▓▓██▄${RESET}  ${GREEN}>_${RESET}`,
+    `${BLUE}  ██▓▓▓▓▓▓▓▓▓▓▓▓▓██▀${RESET}`,
+    `${BLUE}   ▀██▓▓▓▓▓▓▓▓██▀  ▄${RESET}`,
+    `${BLUE}      ▀▀████▀▀   ▀██▀${RESET}`,
+  ].join("\n");
 }
 
 export function createRL(): readline.Interface {
@@ -70,6 +83,14 @@ export function printHelp() {
 ${BOLD}DeepSeek CLI commands${RESET}
   /help                Show this help
   /status              Show model, thinking, cwd, tools, and MCP server counts
+  /session             Save and show current session transcript path
+  /compact [n]         Compact context, keeping n recent messages (default 12)
+  /approvals           List pending shell approvals
+  /approve <id>        Run a pending shell command
+  /deny <id>           Reject a pending shell command
+  /patches             List pending file patch previews
+  /apply <id>          Apply a pending file patch
+  /reject <id>         Reject a pending file patch
   /models              List model presets and compatibility aliases
   /model <name>         Switch model: pro, flash, chat, reasoner, or full model name
   /thinking <mode>      Switch thinking: auto, on, off, high, max
@@ -79,6 +100,8 @@ ${BOLD}DeepSeek CLI commands${RESET}
 ${BOLD}Non-interactive${RESET}
   deepseek --models
   deepseek --json --doctor
+  deepseek --session work1 -t "start a task"
+  deepseek --resume work1 -t "continue"
   deepseek --cwd path/to/repo -t "inspect this project"
   deepseek -t "summarize this repo"
   deepseek --model pro --thinking on -t "review this PR"

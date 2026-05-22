@@ -112,12 +112,16 @@ deepseek --cwd path/to/repo -t "inspect this project"
 
 DeepSeek CLI is designed to feel like a small Claude Code / Codex-style terminal agent:
 
-- Branded startup panel with model, current directory, built-in tool count, and MCP status
+- Branded startup panel with the blue pixel whale logo, model, current directory, built-in tool count, and MCP status
 - One-line `deepseek >` prompt for interactive tasks
 - Visible `thinking...` and per-tool progress lines while the agent works
-- Slash commands: `/help`, `/status`, `/model`, `/thinking`, `/clear`, `/exit`
+- Slash commands: `/help`, `/status`, `/models`, `/model`, `/thinking`, `/approvals`, `/approve`, `/deny`, `/patches`, `/apply`, `/reject`, `/session`, `/compact`, `/clear`, `/exit`
 - `--version`, `--doctor`, and `--json --doctor` for scriptable setup checks before a live model call
 - `--models` for official model presets and compatibility aliases
+- Approval/sandbox layer blocks dangerous shell commands and queues risky commands for `/approve`
+- Patch preview mode queues file writes/edits for `/apply` instead of silently modifying files
+- Session transcripts are saved under `~/.deepseek-cli/sessions/` and can be resumed with `--resume`
+- GitHub Actions CI runs typecheck, build, and smoke E2E tests
 
 In the local multi-agent setup, the file-based shared memory lives at `D:\research\Vipin's Knowledgebase\memory\`. MCP-based agentmemory can also be connected through the `mcp_servers` config when a running memory server is available.
 
@@ -129,16 +133,16 @@ The agent autonomously decides when to use tools:
 
 | Tool | Description |
 |------|-------------|
-| `execute_bash` | Run shell commands |
+| `execute_bash` | Run shell commands through the approval/safety gate |
 | `read_file` | Read files with line numbers |
-| `write_file` | Create or overwrite files |
-| `edit_file` | Surgical string replacement |
+| `write_file` | Create patch previews for new or overwritten files |
+| `edit_file` | Create patch previews for exact string replacements |
 | `glob` | Find files by pattern |
 | `grep` | Search content with regex (ripgrep) |
 
 ### MCP Integration
 
-Connect any MCP-compatible server. The agent automatically discovers and uses MCP tools.
+Connect any MCP-compatible server. The agent automatically discovers MCP tools, and `deepseek --doctor` reports configured servers plus connection diagnostics so agentmemory setups are easy to debug.
 
 ```toml
 # ~/.deepseek-cli/config.toml
@@ -158,7 +162,7 @@ When connected to [agentmemory](https://github.com/rohitg00/agentmemory), DeepSe
 You: remember that the auth service uses RS256 for JWT signing
 DeepSeek: Saved to memory.
 
---- later, in Claude Code ---
+--- later, in Claude Code or Codex ---
 You: what signing algorithm does auth use?
 Claude: RS256 — I can see that from shared memory.
 ```
@@ -200,8 +204,18 @@ SOME_VAR = "value"
 | `DEEPSEEK_REASONING_EFFORT` | Thinking effort: `high`, `max` | `high` |
 | `DEEPSEEK_BASE_URL` | API endpoint | `https://api.deepseek.com` |
 | `DEEPSEEK_CONFIG` | Explicit config file path | unset |
+| `DEEPSEEK_APPROVAL_MODE` | Shell approval mode: `on-request`, `never`, `auto` | `on-request` |
+| `DEEPSEEK_WRITE_MODE` | File write mode: `preview`, `direct` | `preview` |
+| `DEEPSEEK_SANDBOX_MODE` | File-write sandbox: `workspace-write`, `read-only`, `unrestricted` | `workspace-write` |
 
 Config lookup order is `DEEPSEEK_CONFIG`, `deepseek-cli.toml` in the current directory, `.deepseek-cli.toml` in the current directory, `~/.deepseek-cli/config.toml`, then the packaged default config.
+
+
+### Safety and Sessions
+
+By default DeepSeek CLI behaves like a cautious coding agent rather than an unrestricted shell wrapper. Dangerous shell commands are blocked; risky commands create an approval item that can be reviewed with `/approvals`, run with `/approve <id>`, or denied with `/deny <id>`. File write tools create patch previews that can be reviewed with `/patches`, applied with `/apply <id>`, or rejected with `/reject <id>`. Patch application checks that the file has not changed since preview, and `workspace-write` sandbox mode blocks file writes outside the current workspace.
+
+Set `DEEPSEEK_APPROVAL_MODE=auto`, `DEEPSEEK_WRITE_MODE=direct`, or `DEEPSEEK_SANDBOX_MODE=unrestricted` only in trusted automation. Sessions are persisted as JSON transcripts under `~/.deepseek-cli/sessions/`; use `--session <id>` to name one and `--resume <id>` to continue later. Use `/compact [n]` to summarize older context while keeping recent messages.
 
 
 ### JSON Output Policy

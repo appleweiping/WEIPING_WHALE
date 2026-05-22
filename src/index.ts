@@ -1,8 +1,14 @@
 #!/usr/bin/env node
-import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig } from "./config.js";
+import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig, type Config } from "./config.js";
 import { Agent } from "./agent.js";
 import { MCPManager } from "./mcp/manager.js";
 import { getToolDefs } from "./tools/registry.js";
+import { formatPatchList, applyFilePatch, rejectFilePatch } from "./safety/patches.js";
+import { getApprovalMode, listShellApprovals, rejectShellApproval, takeShellApproval } from "./safety/approval.js";
+import { getWriteMode } from "./safety/patches.js";
+import { getSandboxMode } from "./safety/sandbox.js";
+import { runShellCommand } from "./tools/bash.js";
+import { createSessionId, formatSessionInfo, loadSession, saveSession } from "./session.js";
 import {
   banner,
   createRL,
@@ -53,6 +59,8 @@ async function main() {
     process.exit(0);
   }
 
+  const resumeSessionId = readFlag(args, "--resume");
+  const sessionId = readFlag(args, "--session") ?? resumeSessionId ?? createSessionId();
   const task = readFlag(args, "-t") ?? readFlag(args, "--task") ?? readPositionalTask(args);
 
   const config = loadConfig();
@@ -72,7 +80,12 @@ async function main() {
   }
 
   if (args.includes("--doctor")) {
-    printDoctor(config, json);
+    const doctorMcpManager = new MCPManager();
+    if (Object.keys(config.mcp_servers).length > 0) {
+      await doctorMcpManager.connectAll(config.mcp_servers);
+    }
+    printDoctor(config, json, doctorMcpManager);
+    doctorMcpManager.disconnectAll();
     process.exit(config.llm.api_key ? 0 : 1);
   }
 
@@ -88,6 +101,14 @@ async function main() {
   }
 
   const agent = new Agent(config, mcpManager);
+  if (resumeSessionId) {
+    const saved = loadSession(resumeSessionId);
+    if (!saved) {
+      printCliError(`No saved session: ${resumeSessionId}`, json);
+      process.exit(1);
+    }
+    agent.restoreMessages(saved.messages);
+  }
   const stats = () => ({
     toolCount: getToolDefs().length + mcpManager.getToolDefs().length,
     mcpServerCount: mcpManager.getServerCount(),
@@ -100,8 +121,9 @@ async function main() {
 
   if (task) {
     const reply = await agent.run(task, events);
+    saveSession(sessionId, process.cwd(), agent.getRuntime(), agent.getMessages());
     if (json) {
-      console.log(JSON.stringify({ ok: true, ...agent.getRuntime(), output: reply }, null, 2));
+      console.log(JSON.stringify({ ok: true, session: sessionId, ...agent.getRuntime(), output: reply }, null, 2));
     } else {
       printAssistant(reply);
     }
@@ -110,6 +132,7 @@ async function main() {
   }
 
   banner(agent.getRuntime(), process.cwd(), stats());
+  printInfo(formatSessionInfo(sessionId));
 
   const rl = createRL();
   rl.prompt();
@@ -133,6 +156,70 @@ async function main() {
     }
     if (input === "/status") {
       printStatus(agent.getRuntime(), process.cwd(), stats());
+      rl.prompt();
+      return;
+    }
+    if (input === "/session") {
+      saveSession(sessionId, process.cwd(), agent.getRuntime(), agent.getMessages());
+      console.log(formatSessionInfo(sessionId));
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/compact")) {
+      const [, keep] = input.split(/\s+/, 2);
+      const message = agent.compactContext(keep ? Number(keep) : 12);
+      saveSession(sessionId, process.cwd(), agent.getRuntime(), agent.getMessages());
+      console.log(message);
+      rl.prompt();
+      return;
+    }
+    if (input === "/approvals") {
+      const approvals = listShellApprovals();
+      console.log(approvals.length ? approvals.map((item) => `${item.id} ${item.reason}\n${item.command}`).join("\n\n") : "No pending shell approvals.");
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/approve")) {
+      const [, id] = input.split(/\s+/, 2);
+      if (!id) printError("Usage: /approve <id>");
+      else {
+        const approval = takeShellApproval(id);
+        if (!approval) printError(`No pending shell approval: ${id}`);
+        else {
+          printInfo(`Running approved shell command ${id}...`);
+          const result = await runShellCommand(approval.command, approval.timeout);
+          console.log(result.output);
+        }
+      }
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/deny")) {
+      const [, id] = input.split(/\s+/, 2);
+      if (!id) printError("Usage: /deny <id>");
+      else console.log(rejectShellApproval(id) ? `Rejected shell approval ${id}` : `No pending shell approval: ${id}`);
+      rl.prompt();
+      return;
+    }
+    if (input === "/patches") {
+      console.log(formatPatchList());
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/apply")) {
+      const [, id] = input.split(/\s+/, 2);
+      if (!id) printError("Usage: /apply <patch-id>");
+      else {
+        const result = applyFilePatch(id);
+        console.log(result.message);
+      }
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/reject")) {
+      const [, id] = input.split(/\s+/, 2);
+      if (!id) printError("Usage: /reject <patch-id>");
+      else console.log(rejectFilePatch(id) ? `Rejected patch ${id}` : `No pending patch: ${id}`);
       rl.prompt();
       return;
     }
@@ -171,6 +258,7 @@ async function main() {
 
     try {
       const reply = await agent.run(input, events);
+      saveSession(sessionId, process.cwd(), agent.getRuntime(), agent.getMessages());
       printAssistant(reply);
     } catch (err: any) {
       printError(`Error: ${err.message}`);
@@ -194,7 +282,7 @@ main().catch((err) => {
   process.exit(1);
 });
 
-function printDoctor(config: ReturnType<typeof loadConfig>, json = false) {
+function printDoctor(config: Config, json = false, mcpManager?: MCPManager) {
   const configuredMcpServers = Object.keys(config.mcp_servers).length;
   const hasApiKey = Boolean(config.llm.api_key);
   const payload = {
@@ -210,7 +298,14 @@ function printDoctor(config: ReturnType<typeof loadConfig>, json = false) {
       source: process.env.DEEPSEEK_API_KEY ? "env" : config.llm.api_key ? "config" : "missing",
     },
     cwd: process.cwd(),
+    safety: {
+      approval_mode: getApprovalMode(),
+      write_mode: getWriteMode(),
+      sandbox_mode: getSandboxMode(),
+    },
     mcp_servers: configuredMcpServers,
+    mcp_configured: Object.keys(config.mcp_servers),
+    mcp_diagnostics: mcpManager?.getDiagnostics() ?? [],
     builtin_tools: getToolDefs().map((tool) => tool.function.name),
   };
   if (json) {
@@ -268,7 +363,7 @@ function readFlag(args: string[], name: string): string | undefined {
 }
 
 function readPositionalTask(args: string[]): string | null {
-  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace"]);
+  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace", "--session", "--resume"]);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (valueFlags.has(arg)) {

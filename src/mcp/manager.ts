@@ -5,6 +5,7 @@ import type { ToolResult } from "../tools/registry.js";
 
 export class MCPManager {
   private clients: MCPClient[] = [];
+  private connectionStatus: Array<{ name: string; ok: boolean; tools: number; error?: string }> = [];
 
   async connectAll(servers: Record<string, MCPServerConfig>): Promise<void> {
     for (const [name, cfg] of Object.entries(servers)) {
@@ -12,8 +13,10 @@ export class MCPManager {
       try {
         await client.connect();
         this.clients.push(client);
+        this.connectionStatus.push({ name, ok: true, tools: client.getToolDefs().length });
         process.stderr.write(`[mcp] Connected: ${name} (${client.getToolDefs().length} tools)\n`);
       } catch (err: any) {
+        this.connectionStatus.push({ name, ok: false, tools: 0, error: err.message });
         process.stderr.write(`[mcp] Failed to connect ${name}: ${err.message}\n`);
       }
     }
@@ -25,6 +28,10 @@ export class MCPManager {
 
   getServerCount(): number {
     return this.clients.length;
+  }
+
+  getDiagnostics() {
+    return this.connectionStatus;
   }
 
   async callTool(fullName: string, args: Record<string, any>): Promise<ToolResult | null> {

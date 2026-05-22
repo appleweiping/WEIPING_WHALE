@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsdown src/index.ts --format esm --out-dir dist --clean",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "test": "npm run build && node scripts/e2e.mjs"
   },
   "keywords": [
     "deepseek",

@@ -8,6 +8,15 @@ export function getSandboxMode(): SandboxMode {
   return "workspace-write";
 }
 
+export function setSandboxMode(mode: string): SandboxMode {
+  const normalized = mode.trim().toLowerCase();
+  if (normalized !== "workspace-write" && normalized !== "read-only" && normalized !== "unrestricted") {
+    throw new Error("Sandbox mode must be workspace-write, read-only, or unrestricted");
+  }
+  process.env.DEEPSEEK_SANDBOX_MODE = normalized;
+  return normalized;
+}
+
 export function assertWritablePath(path: string, workspace = process.cwd()): void {
   const mode = getSandboxMode();
   if (mode === "unrestricted") return;

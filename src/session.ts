@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import type { Message } from "./llm/deepseek.js";
@@ -40,6 +40,17 @@ export function saveSession(id: string, cwd: string, runtime: Record<string, str
     messages,
   };
   writeFileSync(path, JSON.stringify(state, null, 2), "utf-8");
+}
+
+export function listSessions(limit = 10): SessionState[] {
+  const dir = sessionDir();
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => join(dir, name))
+    .sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs)
+    .slice(0, Math.max(1, limit))
+    .map((path) => JSON.parse(readFileSync(path, "utf-8")) as SessionState);
 }
 
 export function formatSessionInfo(id: string): string {

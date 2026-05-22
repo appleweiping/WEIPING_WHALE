@@ -113,15 +113,17 @@ deepseek --cwd path/to/repo -t "inspect this project"
 DeepSeek CLI is designed to feel like a small Claude Code / Codex-style terminal agent:
 
 - Branded startup panel with the blue pixel whale logo, model, current directory, built-in tool count, and MCP status
-- One-line `deepseek >` prompt for interactive tasks
-- Stable wrapped-line editing for long Chinese/English prompts, with Up/Down visual cursor movement and history at line boundaries
+- Distinct Claude Code-style double-rule input marker (`\u2501\u2501 `, rendered as two long horizontal rules) instead of the old green `deepseek >` prompt
+- Stable wrapped-line editing for long Chinese/English prompts, with Up/Down visual cursor movement, history at line boundaries, Shift-selection, mouse drag selection in modern terminals, and one-shot deletion of selected text
 - Visible `thinking...` and per-tool progress lines while the agent works
-- Slash commands: `/help`, `/status`, `/models`, `/model`, `/thinking`, `/approvals`, `/approve`, `/deny`, `/patches`, `/apply`, `/reject`, `/session`, `/compact`, `/clear`, `/exit`
+- Slash command palette: type `/` or `\` at a whitespace-delimited token boundary, even mid-sentence, then use Up/Down plus Tab/Enter to choose commands and nested options
+- Slash commands: `/help`, `/status`, `/doctor`, `/tools`, `/mcp`, `/sessions`, `/memory`, `/retry`, `/permissions`, `/permission-model`, `/approval`, `/sandbox`, `/write-mode`, `/models`, `/model`, `/thinking`, `/approvals`, `/approve`, `/deny`, `/patches`, `/apply`, `/reject`, `/session`, `/compact`, `/clear`, `/exit`, `/quit`
 - `--version`, `--doctor`, and `--json --doctor` for scriptable setup checks before a live model call
 - `--models` for official model presets and compatibility aliases
 - Approval/sandbox layer blocks dangerous shell commands and queues risky commands for `/approve`
 - Patch preview mode queues file writes/edits for `/apply` instead of silently modifying files
 - Session transcripts are saved under `~/.deepseek-cli/sessions/` and can be resumed with `--resume`
+- Network failures save the current transcript and a compact agentmemory summary automatically; use `/retry` after reconnecting
 - GitHub Actions CI runs typecheck, build, and smoke E2E tests
 
 In the local multi-agent setup, the file-based shared memory lives at `D:\research\Vipin's Knowledgebase\memory\`. MCP-based agentmemory can also be connected through the `mcp_servers` config when a running memory server is available.
@@ -214,7 +216,7 @@ Config lookup order is `DEEPSEEK_CONFIG`, `deepseek-cli.toml` in the current dir
 
 ### Safety and Sessions
 
-By default DeepSeek CLI behaves like a cautious coding agent rather than an unrestricted shell wrapper. Dangerous shell commands are blocked; risky commands create an approval item that can be reviewed with `/approvals`, run with `/approve <id>`, or denied with `/deny <id>`. File write tools create patch previews that can be reviewed with `/patches`, applied with `/apply <id>`, or rejected with `/reject <id>`. Patch application checks that the file has not changed since preview, and `workspace-write` sandbox mode blocks file writes outside the current workspace.
+By default DeepSeek CLI behaves like a cautious coding agent rather than an unrestricted shell wrapper. Dangerous shell commands are blocked; risky commands create an approval item that can be reviewed with `/approvals`, run with `/approve <id>`, or denied with `/deny <id>`. File write tools create patch previews that can be reviewed with `/patches`, applied with `/apply <id>`, or rejected with `/reject <id>`. Patch application checks that the file has not changed since preview, and `workspace-write` sandbox mode blocks file writes outside the current workspace. Use `/permissions` to inspect safety state, `/permission-model <safe|read-only|trusted|locked>` for bundled profiles, or `/approval`, `/sandbox`, and `/write-mode` for individual controls.
 
 Set `DEEPSEEK_APPROVAL_MODE=auto`, `DEEPSEEK_WRITE_MODE=direct`, or `DEEPSEEK_SANDBOX_MODE=unrestricted` only in trusted automation. Sessions are persisted as JSON transcripts under `~/.deepseek-cli/sessions/`; use `--session <id>` to name one and `--resume <id>` to continue later. Use `/compact [n]` to summarize older context while keeping recent messages.
 

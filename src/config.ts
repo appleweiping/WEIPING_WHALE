@@ -18,6 +18,7 @@ export interface Config {
     base_url: string;
     temperature: number;
     max_tokens: number;
+    request_timeout_ms: number;
     thinking: ThinkingMode;
     reasoning_effort: ReasoningEffort;
   };
@@ -116,6 +117,7 @@ const DEFAULT_CONFIG: Config = {
     base_url: "https://api.deepseek.com",
     temperature: 0.3,
     max_tokens: 4096,
+    request_timeout_ms: 120000,
     thinking: "enabled",
     reasoning_effort: "high",
   },
@@ -169,12 +171,23 @@ export function loadConfig(): Config {
   const envBase = process.env.DEEPSEEK_BASE_URL;
   if (envBase) config.llm.base_url = envBase;
 
+  const envTimeout = process.env.DEEPSEEK_REQUEST_TIMEOUT_MS;
+  if (envTimeout) config.llm.request_timeout_ms = normalizeRequestTimeout(envTimeout);
+
   // Resolve api_key_env indirection
   if (!config.llm.api_key && (config.llm as any).api_key_env) {
     config.llm.api_key = process.env[(config.llm as any).api_key_env] || "";
   }
 
   return config;
+}
+
+function normalizeRequestTimeout(input: string): number {
+  const value = Number(input);
+  if (!Number.isFinite(value) || value < 1000) {
+    throw new Error(`Invalid request timeout: ${input}. Use milliseconds >= 1000.`);
+  }
+  return Math.floor(value);
 }
 
 export function applyRuntimeOverrides(config: Config, overrides: RuntimeOverrides): Config {

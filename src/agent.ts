@@ -61,6 +61,14 @@ export class Agent {
     return this.messages;
   }
 
+  getLastUserMessage(): string | null {
+    for (let index = this.messages.length - 1; index >= 0; index--) {
+      const message = this.messages[index];
+      if (message.role === "user" && message.content) return message.content;
+    }
+    return null;
+  }
+
   restoreMessages(messages: Message[]) {
     this.messages = messages;
   }
@@ -86,6 +94,19 @@ export class Agent {
 
   async run(userMessage: string, events: AgentEvents = {}): Promise<string> {
     this.messages.push({ role: "user", content: userMessage });
+    return this.complete(events);
+  }
+
+  async retryLast(events: AgentEvents = {}): Promise<string> {
+    const lastUser = this.getLastUserMessage();
+    if (!lastUser) throw new Error("No previous user message to retry.");
+    while (this.messages.length > 0 && this.messages[this.messages.length - 1].role !== "user") {
+      this.messages.pop();
+    }
+    return this.complete(events);
+  }
+
+  private async complete(events: AgentEvents = {}): Promise<string> {
 
     const allTools = [...getToolDefs(), ...this.mcpManager.getToolDefs()];
 

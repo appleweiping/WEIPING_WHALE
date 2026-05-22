@@ -44,6 +44,7 @@ export class DeepSeekClient {
   private model: string;
   private defaultTemp: number;
   private defaultMaxTokens: number;
+  private requestTimeoutMs: number;
   private thinking: "auto" | "enabled" | "disabled";
   private reasoningEffort: "high" | "max";
 
@@ -53,6 +54,7 @@ export class DeepSeekClient {
     model: string;
     temperature: number;
     max_tokens: number;
+    request_timeout_ms?: number;
     thinking: "auto" | "enabled" | "disabled";
     reasoning_effort: "high" | "max";
   }) {
@@ -61,6 +63,7 @@ export class DeepSeekClient {
     this.model = opts.model;
     this.defaultTemp = opts.temperature;
     this.defaultMaxTokens = opts.max_tokens;
+    this.requestTimeoutMs = opts.request_timeout_ms ?? 120000;
     this.thinking = opts.thinking;
     this.reasoningEffort = opts.reasoning_effort;
   }
@@ -185,18 +188,30 @@ export class DeepSeekClient {
   ): Promise<Response> {
     for (let i = 0; i < retries; i++) {
       try {
-        const res = await fetch(url, init);
+        const res = await fetch(url, {
+          ...init,
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
+        });
         if (res.status === 429 || res.status >= 500) {
           await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
           continue;
         }
         return res;
       } catch (err) {
-        if (i === retries - 1) throw err;
+        if (i === retries - 1) throw new Error(this.formatNetworkError(err));
         await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
       }
     }
     throw new Error("Max retries exceeded");
+  }
+
+  private formatNetworkError(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    const name = err instanceof Error ? err.name : "NetworkError";
+    if (name === "TimeoutError" || message.toLowerCase().includes("timeout")) {
+      return `DeepSeek API request timed out after ${this.requestTimeoutMs}ms. The session was saved; use /retry after the network recovers.`;
+    }
+    return `DeepSeek API network error: ${message}. The session was saved; use /retry after the network recovers.`;
   }
 
   private applyThinkingParams(body: Record<string, any>) {

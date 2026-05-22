@@ -50,6 +50,15 @@ export function getApprovalMode(): ApprovalMode {
   return "on-request";
 }
 
+export function setApprovalMode(mode: string): ApprovalMode {
+  const normalized = mode.trim().toLowerCase();
+  if (normalized !== "auto" && normalized !== "never" && normalized !== "on-request") {
+    throw new Error("Approval mode must be on-request, auto, or never");
+  }
+  process.env.DEEPSEEK_APPROVAL_MODE = normalized;
+  return normalized;
+}
+
 export function classifyShellCommand(command: string): ShellRisk {
   for (const [pattern, reason] of blockedPatterns) {
     if (pattern.test(command)) return { level: "blocked", reason };

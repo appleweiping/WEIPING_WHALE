@@ -23,6 +23,8 @@ function run(args, options = {}) {
       DEEPSEEK_APPROVAL_MODE: "on-request",
       DEEPSEEK_WRITE_MODE: "preview",
       DEEPSEEK_SANDBOX_MODE: "workspace-write",
+      AGENTMEMORY_URL: "http://127.0.0.1:9",
+      DEEPSEEK_SHARED_MEMORY_DIR: homeDir,
       HOME: homeDir,
       USERPROFILE: homeDir,
       ...options.env,
@@ -57,6 +59,21 @@ try {
   assert.equal(badFlag.status, 1, badFlag.error?.message || badFlag.stderr || badFlag.stdout);
   assert.equal(JSON.parse(badFlag.stderr).ok, false);
 
+  const editorSelfTest = run(["--self-test-editor"]);
+  assert.equal(editorSelfTest.status, 0, editorSelfTest.stderr || editorSelfTest.stdout || editorSelfTest.error?.message);
+  const editorSelfTestJson = JSON.parse(editorSelfTest.stdout.match(/\{.*\}/s)?.[0] ?? "{}");
+  assert.deepEqual(editorSelfTestJson, {
+    ok: true,
+    slash: true,
+    backslash: true,
+    nested: true,
+    mcp_nested: true,
+    memory_nested: true,
+    selection_delete: true,
+    vertical_cursor: true,
+    mouse_swallow: true,
+  });
+
   const workspaceDir = mkdtempSync(join(tmpdir(), "deepseek-cli-workspace-"));
   try {
     writeFileSync(join(workspaceDir, "deepseek-cli.toml"), "[agent]\nworkspace = \".\"\n");
@@ -66,11 +83,45 @@ try {
     rmSync(workspaceDir, { recursive: true, force: true });
   }
 
-  const interactive = run(["--session", "e2e-session"], { input: "/session\n/patches\n/approvals\n/exit\n" });
+  const interactive = run(["--session", "e2e-session"], {
+    input: [
+      "/session",
+      "/sessions 5",
+      "/doctor",
+      "/tools",
+      "/mcp status",
+      "/memory save",
+      "/patches",
+      "/approvals",
+      "/permissions",
+      "/permission-model trusted",
+      "/model pro",
+      "/thinking max",
+      "/status",
+      "\\permission-model safe",
+      "/approval never",
+      "/sandbox read-only",
+      "/write-mode direct",
+      "/status",
+      "please /permissions",
+      "/exit",
+    ].join("\n") + "\n",
+  });
   assert.equal(interactive.status, 0, interactive.stderr || interactive.stdout || interactive.error?.message);
   assert.match(interactive.stdout, /session: e2e-session/);
+  assert.match(interactive.stdout, /Tools/);
+  assert.match(interactive.stdout, /builtin_tools/);
+  assert.match(interactive.stderr + interactive.stdout, /saved session summary/);
   assert.match(interactive.stdout, /No pending file patches/);
   assert.match(interactive.stdout, /No pending shell approvals/);
+  assert.match(interactive.stdout, /permission_model: safe/);
+  assert.match(interactive.stdout, /permission_model: trusted/);
+  assert.match(interactive.stdout, /model:\s+deepseek-v4-pro/);
+  assert.match(interactive.stdout, /thinking:\s+enabled/);
+  assert.match(interactive.stdout, /reasoning_effort:\s+max/);
+  assert.match(interactive.stdout, /approval_mode:\s+never/);
+  assert.match(interactive.stdout, /sandbox_mode:\s+read-only/);
+  assert.match(interactive.stdout, /write_mode:\s+direct/);
 
   const resumed = run(["--resume", "e2e-session"], { input: "/session\n/exit\n" });
   assert.equal(resumed.status, 0, resumed.stderr || resumed.stdout || resumed.error?.message);

@@ -10,6 +10,7 @@ const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 const MAGENTA = "\x1b[35m";
+const INVERSE = "\x1b[7m";
 
 export interface RuntimeStatus {
   model: string;
@@ -31,26 +32,52 @@ export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) 
   console.log(`${CYAN}${BOLD}|${RESET} cwd      ${DIM}${pad(shorten(cwd, 36), 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
   console.log(`${CYAN}${BOLD}|${RESET} tools    ${YELLOW}${pad(`${stats.toolCount} total, ${stats.mcpServerCount} MCP`, 36)}${RESET}${CYAN}${BOLD}|${RESET}`);
   console.log(`${CYAN}${BOLD}+------------------------------------------------+${RESET}`);
-  console.log(`${DIM}Type /help for commands, /status for runtime info, /exit to quit.${RESET}`);
+  console.log(`${DIM}Type / or \\ for the command palette, /help for commands, /exit to quit.${RESET}`);
   console.log();
 }
 
 function formatWhaleLogo(): string {
   return [
-    `${CYAN}             .  .  .${RESET}          ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
-    `${CYAN}          .  :  :  .${RESET}       ${DIM}blue whale terminal agent${RESET}`,
-    BLUE + "        .-\"\"\"\"\"\"-.        __" + RESET,
-    BLUE + "  .----'   o   >_   `----._/ /" + RESET,
-    BLUE + " /                         _ <" + RESET,
-    BLUE + "|                         / `-._" + RESET,
-    BLUE + " \\__                  __/      \\" + RESET,
-    BLUE + "    `--.__________.--'       __/ " + RESET,
-    CYAN + "          ~~~  ~~~  ~~~       \\__/" + RESET,
+    `${BLUE}${BOLD}        .-''''-.        _.-' )${RESET}      ${CYAN}${BOLD}DeepSeek CLI${RESET}`,
+    `${BLUE}${BOLD}     .-'  .--.  '-.  .-'  .-'${RESET}      ${DIM}official blue whale inspired${RESET}`,
+    BLUE + "   .'   .'    '.   \/   .'" + RESET,
+    BLUE + "  /    /  .--.  \      /      _.--._" + RESET,
+    BLUE + " |    |  (    )  |    /   _.-'  _.-'" + RESET,
+    BLUE + " |    |   '--'   |   |_.-'   .-'" + RESET,
+    BLUE + "  \    \        /          .'" + RESET,
+    BLUE + "   '.   '.___.'    _..---'" + RESET,
+    `${BLUE}${BOLD}     '-._________.-'${RESET}  ${CYAN}deepseek${RESET}`,
   ].join("\n");
 }
 
-const PROMPT_TEXT = "deepseek > ";
-const PROMPT = `${GREEN}${PROMPT_TEXT}${RESET}`;
+const PROMPT_TEXT = "\u2501\u2501 ";
+const PROMPT = `${BLUE}${BOLD}${PROMPT_TEXT}${RESET}`;
+const MAX_MENU_ITEMS = 9;
+const ENABLE_MOUSE_TRACKING = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const DISABLE_MOUSE_TRACKING = "\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+
+export interface SlashMenuContext {
+  line: string;
+  cursor: number;
+}
+
+export interface SlashMenuItem {
+  label: string;
+  description: string;
+  replacement: string;
+  submitOnAccept?: boolean;
+  replaceStart?: number;
+  replaceEnd?: number;
+}
+
+export interface SlashMenuResult {
+  title: string;
+  replaceStart: number;
+  replaceEnd: number;
+  items: SlashMenuItem[];
+}
+
+export type SlashMenuProvider = (context: SlashMenuContext) => SlashMenuResult | null;
 
 export interface TerminalReader {
   prompt(): void;
@@ -59,7 +86,7 @@ export interface TerminalReader {
   on(event: "close", listener: () => void): this;
 }
 
-export function createRL(): TerminalReader {
+export function createRL(slashMenuProvider?: SlashMenuProvider): TerminalReader {
   if (!process.stdin.isTTY || !process.stdout.isTTY || process.env.DEEPSEEK_LEGACY_READLINE === "1") {
     return readline.createInterface({
       input: process.stdin,
@@ -67,10 +94,10 @@ export function createRL(): TerminalReader {
       prompt: PROMPT,
     }) as TerminalReader;
   }
-  return new TerminalLineReader(process.stdin, process.stdout);
+  return new TerminalLineReader(process.stdin, process.stdout, slashMenuProvider);
 }
 
-class TerminalLineReader extends EventEmitter implements TerminalReader {
+export class TerminalLineReader extends EventEmitter implements TerminalReader {
   private chars: string[] = [];
   private cursor = 0;
   private active = false;
@@ -78,34 +105,59 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
   private history: string[] = [];
   private historyIndex: number | null = null;
   private draft = "";
+  private selectionAnchor: number | null = null;
+  private slashMenu: SlashMenuResult | null = null;
+  private slashIndex = 0;
+  private mouseSelecting = false;
+  private inputStartRow = 1;
   private readonly input: NodeJS.ReadStream;
   private readonly output: NodeJS.WriteStream;
+  private readonly slashMenuProvider?: SlashMenuProvider;
   private readonly keypressHandler: (str: string | undefined, key: KeyInfo) => void;
 
-  constructor(input: NodeJS.ReadStream, output: NodeJS.WriteStream) {
+  constructor(input: NodeJS.ReadStream, output: NodeJS.WriteStream, slashMenuProvider?: SlashMenuProvider) {
     super();
     this.input = input;
     this.output = output;
+    this.slashMenuProvider = slashMenuProvider;
     this.keypressHandler = (str, key) => this.handleKey(str, key);
     readline.emitKeypressEvents(this.input);
     this.input.setRawMode?.(true);
     this.input.resume();
     this.input.on("keypress", this.keypressHandler);
+    this.output.write(ENABLE_MOUSE_TRACKING);
   }
 
   prompt(): void {
     this.active = true;
+    this.refreshSlashMenu(false);
     this.render();
   }
 
   close(): void {
     this.input.off("keypress", this.keypressHandler);
+    this.output.write(DISABLE_MOUSE_TRACKING);
     this.input.setRawMode?.(false);
     this.emit("close");
   }
 
+  debugState(): { line: string; cursor: number; selection: { start: number; end: number } | null; slashLabels: string[] } {
+    return {
+      line: this.chars.join(""),
+      cursor: this.cursor,
+      selection: this.selectionRange(),
+      slashLabels: this.visibleSlashItems().map((item) => item.label),
+    };
+  }
+
+  debugKey(str: string | undefined, key: KeyInfo = {}): void {
+    this.handleKey(str, key);
+  }
+
   private handleKey(str: string | undefined, key: KeyInfo): void {
     if (!this.active) return;
+    const sequence = str ?? key.sequence ?? "";
+    if (!key.name && this.handleMouseSequence(sequence)) return;
     if (key.ctrl && key.name === "c") {
       this.output.write("\n");
       this.close();
@@ -116,66 +168,89 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
       this.close();
       return;
     }
+    if (key.name === "escape") {
+      if (this.slashMenu || this.hasSelection()) {
+        this.slashMenu = null;
+        this.clearSelection();
+        this.render();
+      }
+      return;
+    }
+    if (this.slashMenu && (key.name === "tab" || key.name === "return" || key.name === "enter")) {
+      this.acceptSlashSelection();
+      return;
+    }
     if (key.name === "return" || key.name === "enter") {
       this.submitLine();
       return;
     }
+    if (this.slashMenu && (key.name === "up" || (key.ctrl && key.name === "p"))) {
+      this.slashIndex = Math.max(0, this.slashIndex - 1);
+      this.render();
+      return;
+    }
+    if (this.slashMenu && (key.name === "down" || (key.ctrl && key.name === "n"))) {
+      this.slashIndex = Math.min(this.visibleSlashItems().length - 1, this.slashIndex + 1);
+      this.render();
+      return;
+    }
     if (key.name === "backspace") {
-      this.deleteBeforeCursor();
+      if (!this.deleteSelection()) this.deleteBeforeCursor();
       return;
     }
     if (key.name === "delete" || (key.ctrl && key.name === "d")) {
-      this.deleteAtCursor();
+      if (!this.deleteSelection()) this.deleteAtCursor();
       return;
     }
     if (key.name === "left") {
-      if (this.cursor > 0) this.cursor -= 1;
-      this.render();
+      this.moveCursorTo(Math.max(0, this.cursor - 1), Boolean(key.shift));
       return;
     }
     if (key.name === "right") {
-      if (this.cursor < this.chars.length) this.cursor += 1;
-      this.render();
+      this.moveCursorTo(Math.min(this.chars.length, this.cursor + 1), Boolean(key.shift));
       return;
     }
     if (key.name === "home" || (key.ctrl && key.name === "a")) {
-      this.cursor = 0;
-      this.render();
+      this.moveCursorTo(0, Boolean(key.shift));
       return;
     }
     if (key.name === "end" || (key.ctrl && key.name === "e")) {
-      this.cursor = this.chars.length;
-      this.render();
+      this.moveCursorTo(this.chars.length, Boolean(key.shift));
       return;
     }
     if (key.name === "up") {
+      if (this.hasSelection()) this.clearSelection();
       if (!this.moveVertical(-1)) this.historyPrevious();
+      this.refreshSlashMenu(true);
       this.render();
       return;
     }
     if (key.name === "down") {
+      if (this.hasSelection()) this.clearSelection();
       if (!this.moveVertical(1)) this.historyNext();
+      this.refreshSlashMenu(true);
       this.render();
       return;
     }
     if (key.ctrl && key.name === "u") {
-      this.chars.splice(0, this.cursor);
-      this.cursor = 0;
+      if (!this.deleteSelection()) {
+        this.chars.splice(0, this.cursor);
+        this.cursor = 0;
+      }
       this.resetHistoryNavigation();
+      this.refreshSlashMenu(false);
       this.render();
       return;
     }
     if (key.ctrl && key.name === "k") {
-      this.chars.splice(this.cursor);
+      if (!this.deleteSelection()) this.chars.splice(this.cursor);
       this.resetHistoryNavigation();
+      this.refreshSlashMenu(false);
       this.render();
       return;
     }
-    if (str && !key.ctrl && !key.meta && isPrintable(str)) {
-      this.chars.splice(this.cursor, 0, ...Array.from(str));
-      this.cursor += Array.from(str).length;
-      this.resetHistoryNavigation();
-      this.render();
+    if (str && !key.ctrl && !key.meta && isPlainTextInput(str) && isPrintable(str)) {
+      this.insertText(str);
     }
   }
 
@@ -188,10 +263,24 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
     this.cursor = 0;
     this.historyIndex = null;
     this.draft = "";
+    this.selectionAnchor = null;
+    this.slashMenu = null;
+    this.slashIndex = 0;
+    this.mouseSelecting = false;
     this.active = false;
     this.currentCursorRow = 0;
     this.output.write("\n");
     this.emit("line", line);
+  }
+
+  private insertText(value: string): void {
+    this.deleteSelection();
+    const chars = Array.from(value);
+    this.chars.splice(this.cursor, 0, ...chars);
+    this.cursor += chars.length;
+    this.resetHistoryNavigation();
+    this.refreshSlashMenu(false);
+    this.render();
   }
 
   private deleteBeforeCursor(): void {
@@ -199,6 +288,7 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
     this.chars.splice(this.cursor - 1, 1);
     this.cursor -= 1;
     this.resetHistoryNavigation();
+    this.refreshSlashMenu(false);
     this.render();
   }
 
@@ -206,7 +296,47 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
     if (this.cursor >= this.chars.length) return;
     this.chars.splice(this.cursor, 1);
     this.resetHistoryNavigation();
+    this.refreshSlashMenu(false);
     this.render();
+  }
+
+  private moveCursorTo(nextCursor: number, selecting: boolean): void {
+    if (selecting) {
+      if (this.selectionAnchor === null) this.selectionAnchor = this.cursor;
+    } else {
+      this.selectionAnchor = null;
+    }
+    this.cursor = nextCursor;
+    this.refreshSlashMenu(true);
+    this.render();
+  }
+
+  private hasSelection(): boolean {
+    return this.selectionRange() !== null;
+  }
+
+  private clearSelection(): void {
+    this.selectionAnchor = null;
+  }
+
+  private selectionRange(): { start: number; end: number } | null {
+    if (this.selectionAnchor === null || this.selectionAnchor === this.cursor) return null;
+    return {
+      start: Math.min(this.selectionAnchor, this.cursor),
+      end: Math.max(this.selectionAnchor, this.cursor),
+    };
+  }
+
+  private deleteSelection(): boolean {
+    const selection = this.selectionRange();
+    if (!selection) return false;
+    this.chars.splice(selection.start, selection.end - selection.start);
+    this.cursor = selection.start;
+    this.selectionAnchor = null;
+    this.resetHistoryNavigation();
+    this.refreshSlashMenu(false);
+    this.render();
+    return true;
   }
 
   private historyPrevious(): void {
@@ -235,6 +365,68 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
   private setLine(line: string): void {
     this.chars = Array.from(line);
     this.cursor = this.chars.length;
+    this.selectionAnchor = null;
+  }
+
+  private handleMouseSequence(sequence: string): boolean {
+    if (!sequence.startsWith("\x1b")) return false;
+
+    const sgrEvents = Array.from(sequence.matchAll(/\x1b\[<(\d+);(\d+);(\d+)([mM])/g));
+    if (sgrEvents.length > 0) {
+      const event = sgrEvents[sgrEvents.length - 1];
+      this.applyMouseEvent(Number(event[1]), Number(event[2]), Number(event[3]), event[4] as "m" | "M", true);
+      return true;
+    }
+
+    if (sequence.startsWith("\x1b[M") && sequence.length >= 6) {
+      const code = sequence.charCodeAt(3) - 32;
+      const x = sequence.charCodeAt(4) - 32;
+      const y = sequence.charCodeAt(5) - 32;
+      this.applyMouseEvent(code, x, y, "M", false);
+      return true;
+    }
+
+    return true;
+  }
+
+  private applyMouseEvent(code: number, x: number, y: number, suffix: "m" | "M", isSgr: boolean): void {
+    const index = this.cursorIndexFromTerminalCell(x, y);
+    if (index === null) return;
+    if (suffix === "M" && (code & 32) === 0) {
+      this.mouseSelecting = true;
+      this.selectionAnchor = index;
+      this.cursor = index;
+    } else if (suffix === "M" && this.mouseSelecting && (code & 32) === 32) {
+      this.cursor = index;
+    } else if (suffix === "m") {
+      if (this.mouseSelecting) this.cursor = index;
+      this.mouseSelecting = false;
+      if (this.selectionAnchor === this.cursor) this.selectionAnchor = null;
+    } else if (!isSgr && this.mouseSelecting) {
+      this.cursor = index;
+    }
+    this.refreshSlashMenu(true);
+    this.render();
+  }
+
+  private cursorIndexFromTerminalCell(x: number, y: number): number | null {
+    const targetRow = y - this.inputStartRow;
+    const targetCol = x - 1;
+    if (targetRow < 0 || targetCol < 0) return null;
+    const positions = this.cursorPositions();
+    let bestIndex = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < positions.length; index++) {
+      const position = positions[index];
+      const rowDistance = Math.abs(position.row - targetRow);
+      const colDistance = Math.abs(position.col - targetCol);
+      const score = rowDistance * 1000 + colDistance;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+    return bestIndex;
   }
 
   private resetHistoryNavigation(): void {
@@ -265,6 +457,38 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
     return true;
   }
 
+  private refreshSlashMenu(keepIndex: boolean): void {
+    if (!this.slashMenuProvider || this.hasSelection()) {
+      this.slashMenu = null;
+      this.slashIndex = 0;
+      return;
+    }
+    const menu = this.slashMenuProvider({ line: this.chars.join(""), cursor: this.cursor });
+    this.slashMenu = menu && menu.items.length > 0 ? menu : null;
+    if (!keepIndex || !this.slashMenu) this.slashIndex = 0;
+    else this.slashIndex = Math.min(this.slashIndex, this.visibleSlashItems().length - 1);
+  }
+
+  private visibleSlashItems(): SlashMenuItem[] {
+    return (this.slashMenu?.items ?? []).slice(0, MAX_MENU_ITEMS);
+  }
+
+  private acceptSlashSelection(): void {
+    const menu = this.slashMenu;
+    const item = this.visibleSlashItems()[this.slashIndex];
+    if (!menu || !item) return;
+    const replaceStart = item.replaceStart ?? menu.replaceStart;
+    const replaceEnd = item.replaceEnd ?? menu.replaceEnd;
+    const replacement = item.replacement;
+    this.chars.splice(replaceStart, replaceEnd - replaceStart, ...Array.from(replacement));
+    this.cursor = replaceStart + Array.from(replacement).length;
+    this.clearSelection();
+    this.resetHistoryNavigation();
+    this.refreshSlashMenu(false);
+    this.render();
+    if (item.submitOnAccept) this.submitLine();
+  }
+
   private render(): void {
     if (!this.active) return;
     readline.moveCursor(this.output, 0, -this.currentCursorRow);
@@ -272,16 +496,52 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
     readline.clearScreenDown(this.output);
 
     const line = this.chars.join("");
-    this.output.write(PROMPT + line);
+    this.inputStartRow = (this.output.rows || 24) - this.currentCursorRow;
+    this.output.write(PROMPT + this.renderLineWithSelection(line));
 
     const columns = terminalColumns(this.output);
     const end = measureColumns(PROMPT_TEXT + line, columns);
+    const footerRows = this.renderSlashMenu(columns, end.row);
     const desired = measureColumns(PROMPT_TEXT + this.chars.slice(0, this.cursor).join(""), columns);
-    if (end.row > desired.row) {
-      readline.moveCursor(this.output, 0, -(end.row - desired.row));
+    const renderedBottomRow = end.row + footerRows;
+    if (renderedBottomRow > desired.row) {
+      readline.moveCursor(this.output, 0, -(renderedBottomRow - desired.row));
     }
     readline.cursorTo(this.output, desired.col);
     this.currentCursorRow = desired.row;
+  }
+
+  private renderLineWithSelection(line: string): string {
+    const selection = this.selectionRange();
+    if (!selection) return line;
+    const chars = Array.from(line);
+    let output = "";
+    for (let index = 0; index < chars.length; index++) {
+      const char = chars[index];
+      output += index >= selection.start && index < selection.end ? `${INVERSE}${char}${RESET}` : char;
+    }
+    return output;
+  }
+
+  private renderSlashMenu(columns: number, _inputEndRow: number): number {
+    if (!this.slashMenu) return 0;
+    const items = this.visibleSlashItems();
+    if (items.length === 0) return 0;
+    const width = Math.min(Math.max(44, ...items.map((item) => stripAnsi(`${item.label} ${item.description}`).length + 6)), columns - 2);
+    const lines = [`${DIM}${this.slashMenu.title}${RESET}`];
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
+      const selected = index === this.slashIndex;
+      const prefix = selected ? `${BLUE}${BOLD}>${RESET}` : " ";
+      const label = selected ? `${BOLD}${item.label}${RESET}` : item.label;
+      const raw = `${prefix} ${label} ${DIM}${item.description}${RESET}`;
+      lines.push(truncateDisplay(raw, width));
+    }
+    if ((this.slashMenu.items.length ?? 0) > items.length) {
+      lines.push(`${DIM}  ... ${this.slashMenu.items.length - items.length} more, keep typing to filter${RESET}`);
+    }
+    this.output.write("\n" + lines.join("\n"));
+    return lines.length;
   }
 
   private cursorPositions(): CursorPosition[] {
@@ -294,10 +554,12 @@ class TerminalLineReader extends EventEmitter implements TerminalReader {
   }
 }
 
-interface KeyInfo {
+export interface KeyInfo {
   name?: string;
   ctrl?: boolean;
   meta?: boolean;
+  shift?: boolean;
+  sequence?: string;
 }
 
 interface CursorPosition {
@@ -334,9 +596,10 @@ function measureColumns(value: string, columns: number): CursorPosition {
 }
 
 function charWidth(char: string, col: number): number {
-  if (char === "	") return 4 - (col % 4);
+  if (char === "\t") return 4 - (col % 4);
   const code = char.codePointAt(0) ?? 0;
-  if (code === 0 || code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+  if (code === 0) return 0;
+  if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
   if (isCombiningMark(code)) return 0;
   return isFullWidthCodePoint(code) ? 2 : 1;
 }
@@ -376,6 +639,35 @@ function isPrintable(value: string): boolean {
   });
 }
 
+function isPlainTextInput(value: string): boolean {
+  return !/[\x00-\x1f\x7f]/.test(value);
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function truncateDisplay(value: string, width: number): string {
+  const plain = stripAnsi(value);
+  if (plain.length <= width) return value;
+  let visible = 0;
+  let output = "";
+  for (let index = 0; index < value.length; index++) {
+    if (value[index] === "\x1b") {
+      const match = value.slice(index).match(/^\x1b\[[0-9;]*m/);
+      if (match) {
+        output += match[0];
+        index += match[0].length - 1;
+        continue;
+      }
+    }
+    if (visible >= width - 1) break;
+    output += value[index];
+    visible += 1;
+  }
+  return output + `${DIM}?${RESET}`;
+}
+
 export function printAssistant(text: string) {
   console.log(`\n${BOLD}DeepSeek${RESET}\n${text}\n`);
 }
@@ -405,7 +697,17 @@ export function printHelp() {
   console.log(`
 ${BOLD}DeepSeek CLI commands${RESET}
   /help                Show this help
-  /status              Show model, thinking, cwd, tools, and MCP server counts
+  /status              Show model, thinking, cwd, tools, safety, and MCP server counts
+  /doctor              Run config, auth, safety, tool, and MCP diagnostics
+  /tools               List built-in and MCP tools
+  /mcp <cmd>           MCP status or reconnect: status, reconnect
+  /sessions [n]        List recent saved sessions
+  /memory <cmd>        Save session summary to agentmemory: save, status
+  /retry               Retry the last user request after a network failure
+  /permissions         Show permission, sandbox, and write-mode controls
+  /approval <mode>     Set shell approvals: on-request, auto, never
+  /sandbox <mode>      Set file-write sandbox: workspace-write, read-only, unrestricted
+  /write-mode <mode>   Set file writes: preview, direct
   /session             Save and show current session transcript path
   /compact [n]         Compact context, keeping n recent messages (default 12)
   /approvals           List pending shell approvals
@@ -415,13 +717,20 @@ ${BOLD}DeepSeek CLI commands${RESET}
   /apply <id>          Apply a pending file patch
   /reject <id>         Reject a pending file patch
   /models              List model presets and compatibility aliases
-  /model <name>         Switch model: pro, flash, chat, reasoner, or full model name
-  /thinking <mode>      Switch thinking: auto, on, off, high, max
+  /model <name>        Switch model: pro, flash, chat, reasoner, or full model name
+  /thinking <mode>     Switch thinking: auto, on, off, high, max
   /clear               Clear the terminal
   /exit                Quit
+  /quit                Quit
+
+${BOLD}Command palette${RESET}
+  Type / or \\ at the start of a whitespace-delimited token to open choices.
+  The palette works mid-line, filters as you type, and opens nested choices for model, approval, sandbox, write-mode, and pending IDs.
+  Use Up/Down to move, Tab or Enter to accept, Escape to dismiss.
 
 ${BOLD}Line editing${RESET}
   Long wrapped input supports Left/Right, Home/End, Backspace/Delete, and Up/Down visual-row movement.
+  Hold Shift with Left/Right/Home/End to select text; Backspace/Delete replaces one-by-one deletion with one-shot selection deletion.
   At the top or bottom visual row, Up/Down navigates command history.
 
 ${BOLD}Non-interactive${RESET}
@@ -436,7 +745,7 @@ ${BOLD}Non-interactive${RESET}
 `);
 }
 
-export function printStatus(runtime: RuntimeStatus, cwd: string, stats: BannerStats) {
+export function printStatus(runtime: RuntimeStatus, cwd: string, stats: BannerStats & { approvalMode?: string; sandboxMode?: string; writeMode?: string }) {
   console.log(`
 ${BOLD}Status${RESET}
   model:            ${runtime.model}
@@ -445,6 +754,9 @@ ${BOLD}Status${RESET}
   cwd:              ${cwd}
   tools:            ${stats.toolCount}
   mcp:              ${stats.mcpServerCount} server(s)
+  approval_mode:    ${stats.approvalMode ?? "unknown"}
+  sandbox_mode:     ${stats.sandboxMode ?? "unknown"}
+  write_mode:       ${stats.writeMode ?? "unknown"}
 `);
 }
 

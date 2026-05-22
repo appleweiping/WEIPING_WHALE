@@ -21,6 +21,15 @@ export function getWriteMode(): "preview" | "direct" {
   return process.env.DEEPSEEK_WRITE_MODE === "direct" ? "direct" : "preview";
 }
 
+export function setWriteMode(mode: string): "preview" | "direct" {
+  const normalized = mode.trim().toLowerCase();
+  if (normalized !== "preview" && normalized !== "direct") {
+    throw new Error("Write mode must be preview or direct");
+  }
+  process.env.DEEPSEEK_WRITE_MODE = normalized;
+  return normalized;
+}
+
 export function createFilePatch(kind: PatchKind, path: string, after: string): PendingFilePatch {
   assertWritablePath(path);
   const before = existsSync(path) ? readFileSync(path, "utf-8") : "";

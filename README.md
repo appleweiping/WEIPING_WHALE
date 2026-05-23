@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="assets/banner.png" alt="DeepSeek CLI — Open-source AI in your terminal" width="720" />
+  <img src="assets/banner.png" alt="DeepSeek CLI" width="720" />
 </p>
 
 <p align="center">
-  <strong>Interactive terminal agent powered by DeepSeek. Native MCP support. Shared memory across agents.</strong>
+  <strong>Terminal-native coding agent powered by DeepSeek V4.</strong>
 </p>
 
 <p align="center">
@@ -19,38 +19,11 @@
 
 ---
 
-## What is this?
+## Overview
 
-DeepSeek CLI is an **interactive coding agent** that runs in your terminal — like Claude Code or Codex, but powered by DeepSeek models. It can read/write files, execute commands, search code, and connect to any MCP server (including shared memory systems like [agentmemory](https://github.com/rohitg00/agentmemory)).
+DeepSeek CLI is an interactive coding agent that runs in your terminal. It reads and writes files, executes shell commands, searches codebases, and connects to external tools via MCP — all driven by DeepSeek V4 Pro and Flash models.
 
-## Works alongside
-
-<table>
-<tr>
-<td align="center" width="20%">
-<img src="https://upload.wikimedia.org/wikipedia/commons/e/ec/DeepSeek_logo.svg" alt="DeepSeek" width="48" height="48" /><br/>
-<strong>DeepSeek</strong><br/>
-<sub>V4 Pro / Flash / Chat</sub>
-</td>
-<td align="center" width="20%">
-<img src="https://github.com/openai.png?size=120" alt="Codex" width="48" height="48" /><br/>
-<strong>Codex CLI</strong><br/>
-<sub>GPT-5.5</sub>
-</td>
-<td align="center" width="20%">
-<img src="https://matthiasroder.com/content/images/2026/01/Claude.png?size=120" alt="Claude Code" width="48" height="48" /><br/>
-<strong>Claude Code</strong><br/>
-<sub>Opus / Sonnet</sub>
-</td>
-<td align="center" width="20%">
-<img src="https://github.com/rohitg00/agentmemory/raw/main/assets/banner.png" alt="agentmemory" width="80" /><br/>
-<strong>agentmemory</strong><br/>
-<sub>Shared memory</sub>
-</td>
-</tr>
-</table>
-
-All agents share the same memory server — what one agent learns, all agents remember.
+20KB single-file bundle. Three runtime dependencies. No AI SDK.
 
 ---
 
@@ -60,92 +33,87 @@ All agents share the same memory server — what one agent learns, all agents re
 npm install -g deepseek-cli-agent
 ```
 
-Or run directly:
+Or run without installing:
 
 ```bash
 npx deepseek-cli-agent
 ```
 
-Or clone and build:
+Or build from source:
 
 ```bash
 git clone https://github.com/appleweiping/deepseek-cli.git
-cd deepseek-cli
-npm install && npm run build
+cd deepseek-cli && npm install && npm run build
 node dist/index.js
 ```
 
-## Quick Start
+---
+
+## Usage
 
 ```bash
-# Set your API key
+# Set API key
 export DEEPSEEK_API_KEY="sk-..."
 
-# Interactive mode
+# Interactive session
 deepseek
-
-# Inspect local setup without calling the model
-deepseek --version
-deepseek --doctor
-deepseek --json --doctor
-
-# List official presets and aliases
-deepseek --models
 
 # Single task
 deepseek -t "refactor the auth module to use JWT"
-deepseek "explain this repository"
 
-# With a specific model and thinking mode
-deepseek --model pro --thinking on -t "review this PR for security issues"
+# Model and thinking control
+deepseek --model pro --thinking max -t "review this PR for security issues"
 deepseek --model flash --thinking off -t "summarize these files"
-deepseek --model=pro --thinking=max "debug the failing tests"
 
-# Same controls through env
-DEEPSEEK_MODEL=flash DEEPSEEK_THINKING=off deepseek -t "summarize this repo"
-
-# Run against another working directory
-deepseek --cwd path/to/repo -t "inspect this project"
+# Diagnostics (no API call)
+deepseek --doctor
+deepseek --models
 ```
 
-## Terminal Experience
-
-DeepSeek CLI is designed to feel like a small Claude Code / Codex-style terminal agent:
-
-- Branded startup panel with the blue pixel whale logo, model, current directory, built-in tool count, and MCP status
-- Distinct Claude Code-style double-rule input marker (`\u2501\u2501 `, rendered as two long horizontal rules) instead of the old green `deepseek >` prompt
-- Stable wrapped-line editing for long Chinese/English prompts, with Up/Down visual cursor movement, history at line boundaries, Shift-selection, mouse drag selection in modern terminals, and one-shot deletion of selected text
-- Visible `thinking...` and per-tool progress lines while the agent works
-- Slash command palette: type `/` or `\` at a whitespace-delimited token boundary, even mid-sentence, then use Up/Down plus Tab/Enter to choose commands and nested options
-- Slash commands: `/help`, `/status`, `/doctor`, `/tools`, `/mcp`, `/sessions`, `/memory`, `/retry`, `/permissions`, `/permission-model`, `/approval`, `/sandbox`, `/write-mode`, `/models`, `/model`, `/thinking`, `/approvals`, `/approve`, `/deny`, `/patches`, `/apply`, `/reject`, `/session`, `/compact`, `/clear`, `/exit`, `/quit`
-- `--version`, `--doctor`, and `--json --doctor` for scriptable setup checks before a live model call
-- `--models` for official model presets and compatibility aliases
-- Approval/sandbox layer blocks dangerous shell commands and queues risky commands for `/approve`
-- Patch preview mode queues file writes/edits for `/apply` instead of silently modifying files
-- Session transcripts are saved under `~/.deepseek-cli/sessions/` and can be resumed with `--resume`
-- Network failures save the current transcript and a compact agentmemory summary automatically; use `/retry` after reconnecting
-- GitHub Actions CI runs typecheck, build, and smoke E2E tests
-
-In the local multi-agent setup, the file-based shared memory lives at `D:\research\Vipin's Knowledgebase\memory\`. MCP-based agentmemory can also be connected through the `mcp_servers` config when a running memory server is available.
+---
 
 ## Features
 
 ### Built-in Tools
 
-The agent autonomously decides when to use tools:
-
 | Tool | Description |
 |------|-------------|
-| `execute_bash` | Run shell commands through the approval/safety gate |
+| `execute_bash` | Shell execution with approval gate |
 | `read_file` | Read files with line numbers |
-| `write_file` | Create patch previews for new or overwritten files |
-| `edit_file` | Create patch previews for exact string replacements |
+| `write_file` | Create or overwrite files (patch preview in safe mode) |
+| `edit_file` | Exact string replacement (patch preview in safe mode) |
 | `glob` | Find files by pattern |
-| `grep` | Search content with regex (ripgrep) |
+| `grep` | Regex content search (ripgrep) |
+
+### Terminal Editor
+
+- Wrapped-line editing with visual Up/Down cursor movement
+- Shift-selection, mouse drag selection, one-shot deletion of selected text
+- Command history navigation at line boundaries
+- Slash command palette with scrollable menu, mouse click support, and nested argument selection
+
+### Command Palette
+
+Type `/` or `\` at any whitespace boundary to open the palette. Supports filtering, keyboard navigation (Up/Down/PageUp/PageDown), mouse wheel scrolling, and click-to-select.
+
+Commands: `/help` `/status` `/doctor` `/tools` `/mcp` `/sessions` `/memory` `/retry` `/permissions` `/permission-model` `/approval` `/sandbox` `/write-mode` `/models` `/model` `/thinking` `/session` `/compact` `/approvals` `/approve` `/deny` `/patches` `/apply` `/reject` `/clear` `/exit`
+
+### Safety Model
+
+Four bundled permission profiles control shell execution, file writes, and sandbox scope:
+
+| Profile | Writes | Sandbox | Shell Approval |
+|---------|--------|---------|----------------|
+| `safe` | preview | workspace | on-request |
+| `read-only` | blocked | read-only | on-request |
+| `trusted` | direct | unrestricted | auto |
+| `locked` | preview | read-only | never |
+
+Risky shell commands are queued for review (`/approvals` → `/approve <id>`). File edits create patch previews (`/patches` → `/apply <id>`).
 
 ### MCP Integration
 
-Connect any MCP-compatible server. The agent automatically discovers MCP tools, and `deepseek --doctor` reports configured servers plus connection diagnostics so agentmemory setups are easy to debug.
+Connect any MCP-compatible server. The agent discovers tools at startup and exposes them alongside built-in tools.
 
 ```toml
 # ~/.deepseek-cli/config.toml
@@ -157,123 +125,82 @@ args = ["-y", "@agentmemory/mcp"]
 AGENTMEMORY_URL = "http://localhost:3111"
 ```
 
-### Multi-Agent Memory Sharing
+`deepseek --doctor` reports MCP connection status and diagnostics.
 
-When connected to [agentmemory](https://github.com/rohitg00/agentmemory), DeepSeek CLI shares persistent memory with Claude Code, Codex, OpenCode, and any other MCP-compatible agent:
+### Sessions
 
-```
-You: remember that the auth service uses RS256 for JWT signing
-DeepSeek: Saved to memory.
+Transcripts are persisted under `~/.deepseek-cli/sessions/`. Name a session with `--session <id>`, resume with `--resume <id>`. Network failures auto-save the transcript. Use `/compact [n]` to summarize older context.
 
---- later, in Claude Code or Codex ---
-You: what signing algorithm does auth use?
-Claude: RS256 — I can see that from shared memory.
-```
+---
 
 ## Configuration
 
-Create `~/.deepseek-cli/config.toml`:
-
 ```toml
+# ~/.deepseek-cli/config.toml
 [llm]
-model = "deepseek-v4-flash"       # or deepseek-v4-pro
-api_key_env = "DEEPSEEK_API_KEY"  # env var name containing the key
+model = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
 temperature = 0.3
 max_tokens = 4096
-thinking = "enabled"              # auto/default, enabled, disabled
-reasoning_effort = "high"         # high or max when thinking is enabled
+thinking = "enabled"
+reasoning_effort = "high"
 
 [agent]
 max_iterations = 50
 workspace = "."
-
-# Add any MCP server
-[mcp_servers.my_server]
-command = "node"
-args = ["path/to/server.mjs"]
-
-[mcp_servers.my_server.env]
-SOME_VAR = "value"
 ```
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DEEPSEEK_API_KEY` | API key (required) | - |
-| `DEEPSEEK_MODEL` | Model name or alias: `pro`, `flash`, `chat`, `reasoner` | `deepseek-v4-flash` |
-| `DEEPSEEK_THINKING` | Thinking mode: `auto`, `on`, `off`, `high`, `max` | `enabled` |
-| `DEEPSEEK_REASONING_EFFORT` | Thinking effort: `high`, `max` | `high` |
+| `DEEPSEEK_API_KEY` | API key (required) | — |
+| `DEEPSEEK_MODEL` | `pro`, `flash`, `chat`, `reasoner`, or full model name | `deepseek-v4-flash` |
+| `DEEPSEEK_THINKING` | `auto`, `on`, `off`, `high`, `max` | `enabled` |
 | `DEEPSEEK_BASE_URL` | API endpoint | `https://api.deepseek.com` |
-| `DEEPSEEK_CONFIG` | Explicit config file path | unset |
-| `DEEPSEEK_APPROVAL_MODE` | Shell approval mode: `on-request`, `never`, `auto` | `on-request` |
-| `DEEPSEEK_WRITE_MODE` | File write mode: `preview`, `direct` | `preview` |
-| `DEEPSEEK_SANDBOX_MODE` | File-write sandbox: `workspace-write`, `read-only`, `unrestricted` | `workspace-write` |
+| `DEEPSEEK_APPROVAL_MODE` | `on-request`, `auto`, `never` | `on-request` |
+| `DEEPSEEK_WRITE_MODE` | `preview`, `direct` | `preview` |
+| `DEEPSEEK_SANDBOX_MODE` | `workspace-write`, `read-only`, `unrestricted` | `workspace-write` |
 
-Config lookup order is `DEEPSEEK_CONFIG`, `deepseek-cli.toml` in the current directory, `.deepseek-cli.toml` in the current directory, `~/.deepseek-cli/config.toml`, then the packaged default config.
+### Model Presets
 
+| Preset | Model | Thinking |
+|--------|-------|----------|
+| `pro` | deepseek-v4-pro | enabled |
+| `flash` | deepseek-v4-flash | enabled |
+| `chat` | deepseek-v4-flash | disabled |
+| `reasoner` | deepseek-v4-flash | enabled |
 
-### Safety and Sessions
+Switch at runtime with `/model <preset>` and `/thinking <mode>`.
 
-By default DeepSeek CLI behaves like a cautious coding agent rather than an unrestricted shell wrapper. Dangerous shell commands are blocked; risky commands create an approval item that can be reviewed with `/approvals`, run with `/approve <id>`, or denied with `/deny <id>`. File write tools create patch previews that can be reviewed with `/patches`, applied with `/apply <id>`, or rejected with `/reject <id>`. Patch application checks that the file has not changed since preview, and `workspace-write` sandbox mode blocks file writes outside the current workspace. Use `/permissions` to inspect safety state, `/permission-model <safe|read-only|trusted|locked>` for bundled profiles, or `/approval`, `/sandbox`, and `/write-mode` for individual controls.
-
-Set `DEEPSEEK_APPROVAL_MODE=auto`, `DEEPSEEK_WRITE_MODE=direct`, or `DEEPSEEK_SANDBOX_MODE=unrestricted` only in trusted automation. Sessions are persisted as JSON transcripts under `~/.deepseek-cli/sessions/`; use `--session <id>` to name one and `--resume <id>` to continue later. Use `/compact [n]` to summarize older context while keeping recent messages.
-
-
-### JSON Output Policy
-
-`--json` makes non-interactive commands return stable machine-readable output. Successful task runs use `{ "ok": true, "model": string, "thinking": string, "reasoning_effort": string, "output": string }`; CLI/setup errors use `{ "ok": false, "error": { "message": string } }`; `--json --doctor` redacts secrets and reports auth source only.
-
-### Model and Thinking Modes
-
-DeepSeek V4 exposes Pro and Flash variants in the public API. Both support thinking and non-thinking mode through the request-level `thinking` parameter. The official default is thinking enabled, and the CLI lets you combine model and thinking mode freely:
-
-| CLI | Model | Thinking |
-|-----|-------|----------|
-| `--model pro --thinking on` | `deepseek-v4-pro` | enabled |
-| `--model pro --thinking off` | `deepseek-v4-pro` | disabled |
-| `--model flash --thinking on` | `deepseek-v4-flash` | enabled |
-| `--model flash --thinking off` | `deepseek-v4-flash` | disabled |
-
-Compatibility aliases are supported: `chat` maps to Flash non-thinking, and `reasoner` maps to Flash thinking. The legacy API names `deepseek-chat` and `deepseek-reasoner` are also normalized the same way.
-
-Interactive switching is available without restarting:
-
-```text
-/model pro
-/thinking max
-/model flash
-/thinking off
-```
-
-The agent can also switch autonomously with the built-in `configure_deepseek_runtime` tool when a task benefits from Pro or thinking mode, then switch back for routine work.
+---
 
 ## Architecture
 
 ```
-20KB single-file bundle, zero AI SDK dependencies
-
 ┌─────────────────────────────────────────────┐
-│  Terminal UI (readline)                       │
+│  Terminal UI                                  │
+│  • Raw data mouse interception               │
+│  • Scrollable command palette                │
+│  • Wrapped-line editor with selection        │
 ├─────────────────────────────────────────────┤
-│  Agent Loop (message → tool calls → repeat)  │
+│  Agent Loop                                  │
+│  • Message → tool calls → repeat            │
+│  • Auto model/thinking switching             │
 ├──────────────────┬──────────────────────────┤
 │  Built-in Tools  │  MCP Client (stdio)       │
-│  • bash          │  • agentmemory            │
-│  • file r/w/edit │  • any MCP server         │
-│  • glob/grep     │                           │
+│  • bash          │  • Any MCP server         │
+│  • file r/w/edit │  • agentmemory            │
+│  • glob / grep   │  • Custom tools           │
 ├──────────────────┴──────────────────────────┤
 │  DeepSeek API (OpenAI-compatible, native fetch) │
 └─────────────────────────────────────────────┘
 ```
 
-## Why?
+20KB bundle. Zero AI SDK dependencies. Three runtime deps: `fast-xml-parser`, `fastq`, `toml`.
 
-- **DeepSeek is cheap and fast** — great for routine coding tasks, file operations, bulk edits
-- **MCP makes it composable** — plug in memory, databases, APIs, other agents
-- **20KB, 3 deps** — no bloated SDK, no framework lock-in, just fetch + tools
-- **Multi-agent workflows** — use DeepSeek for grunt work, escalate to Claude/GPT for complex reasoning
+---
 
 ## License
 

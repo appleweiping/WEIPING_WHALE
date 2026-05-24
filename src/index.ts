@@ -11,6 +11,8 @@ import { getSandboxMode, setSandboxMode } from "./safety/sandbox.js";
 import { runShellCommand } from "./tools/bash.js";
 import { createSessionId, formatSessionInfo, listSessions, loadSession, saveSession } from "./session.js";
 import { saveSessionMemory, type SessionMemoryResult } from "./memory.js";
+import { handleTodoCommand } from "./tools/todo.js";
+import { handleMonitorCommand, type MonitorEvent } from "./tools/monitor.js";
 import {
   banner,
   createRL,
@@ -35,6 +37,31 @@ import "./tools/file-write.js";
 import "./tools/glob.js";
 
 const VERSION = "0.1.0";
+
+// ── Execution mode ────────────────────────────────────────────────────────────
+type ExecMode = "auto" | "plan" | "ask";
+let _execMode: ExecMode = "auto";
+export function getExecMode(): ExecMode { return _execMode; }
+export function setExecMode(mode: ExecMode) { _execMode = mode; }
+
+// ── Image attachment queue ────────────────────────────────────────────────────
+import { existsSync, readFileSync } from "fs";
+import { extname } from "path";
+const _pendingImages: { path: string; base64: string; mimeType: string }[] = [];
+export function attachImage(filePath: string): string {
+  if (!existsSync(filePath)) return `File not found: ${filePath}`;
+  const ext = extname(filePath).toLowerCase();
+  const mimeMap: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp" };
+  const mimeType = mimeMap[ext];
+  if (!mimeType) return `Unsupported image type: ${ext}. Use jpg, png, gif, or webp.`;
+  const base64 = readFileSync(filePath).toString("base64");
+  _pendingImages.push({ path: filePath, base64, mimeType });
+  return `  Attached: ${filePath} (${mimeType}, ${Math.round(base64.length * 0.75 / 1024)}KB)`;
+}
+export function getPendingImages() { return [..._pendingImages]; }
+export function clearPendingImages() { _pendingImages.length = 0; }
+
+
 
 async function main() {
   const args = process.argv.slice(2);
@@ -444,6 +471,11 @@ const COMMAND_DEFS = [
   { name: "clear", args: "", description: "clear the terminal", submit: true },
   { name: "exit", args: "", description: "quit DeepSeek CLI", submit: true },
   { name: "quit", args: "", description: "quit DeepSeek CLI", submit: true },
+  { name: "todo", args: "<add|done|start|remove|clear|list>", description: "manage persistent task list" },
+  { name: "monitor", args: "<start|stop|logs|list>", description: "run and watch background processes" },
+  { name: "mode", args: "<auto|plan|ask>", description: "set execution mode: auto (run freely), plan (think first), ask (confirm each edit)" },
+  { name: "image", args: "<path>", description: "attach an image to the next message" },
+  { name: "images", args: "", description: "list attached images", submit: true },
 ] as const;
 
 const PERMISSION_MODE_OPTIONS = [
@@ -633,6 +665,50 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         console.clear();
         banner(context.agent.getRuntime(), process.cwd(), context.stats());
         return true;
+      case "todo":
+        console.log(handleTodoCommand(arg || "list"));
+        return true;
+      case "monitor":
+        console.log(handleMonitorCommand(arg || "list", (id, event) => {
+          const color = event.type === "stderr" ? "[33m" : event.type === "error" ? "[31m" : "[0m";
+          process.stdout.write(`
+  [2m[${id}][0m ${color}${event.data}[0m
+`);
+        }));
+        return true;
+      case "mode": {
+        const validModes = ["auto", "plan", "ask"];
+        if (!arg) {
+          console.log(`  execution_mode: ${getExecMode()}
+  auto  run tools and edits freely
+  plan  think and outline before acting
+  ask   confirm each file edit before applying`);
+        } else if (validModes.includes(arg.toLowerCase())) {
+          setExecMode(arg.toLowerCase() as any);
+          console.log(`  execution_mode: ${getExecMode()}`);
+          if (arg === "plan") {
+            context.agent.setSystemSuffix("You are in PLAN MODE. Before taking any action or writing any file, first output a numbered plan of what you will do. Wait for user confirmation before executing. Prefix your plan with [PLAN].");
+          } else if (arg === "ask") {
+            context.agent.setSystemSuffix("You are in ASK MODE. Before writing or modifying any file, you MUST ask the user for confirmation with the exact change you plan to make. Only proceed after explicit approval.");
+          } else {
+            context.agent.setSystemSuffix("");
+          }
+        } else {
+          printError("Usage: /mode <auto|plan|ask>");
+        }
+        return true;
+      }
+      case "image": {
+        if (!arg) { printError("Usage: /image <path>"); return true; }
+        console.log(attachImage(arg));
+        return true;
+      }
+      case "images": {
+        const imgs = getPendingImages();
+        if (imgs.length === 0) { console.log("  No images attached."); }
+        else { imgs.forEach((img, i) => console.log(`  [${i+1}] ${img.path} (${img.mimeType})`)); }
+        return true;
+      }
       default:
         return false;
     }
@@ -813,6 +889,26 @@ function buildArgumentMenu(command: string, query: string, replaceStart: number,
       ...MODEL_PRESETS.map((preset) => ({ value: preset.name, description: `${preset.model}, thinking=${preset.thinking}` })),
       { value: "chat", description: "compatibility alias, non-thinking Flash" },
       { value: "reasoner", description: "compatibility alias, thinking Flash" },
+    ],
+    mode: [
+      { value: "auto", description: "run tools and edits freely without asking" },
+      { value: "plan", description: "think and outline before acting, wait for confirmation" },
+      { value: "ask", description: "confirm each file edit before applying" },
+    ],
+    todo: [
+      { value: "add", description: "add a new task: /todo add <text>" },
+      { value: "done", description: "mark task done: /todo done <id>" },
+      { value: "start", description: "mark task in progress: /todo start <id>" },
+      { value: "remove", description: "remove a task: /todo remove <id>" },
+      { value: "clear", description: "clear done tasks (or all)" },
+      { value: "list", description: "list all tasks" },
+    ],
+    monitor: [
+      { value: "start", description: "start monitoring a command: /monitor start <cmd>" },
+      { value: "stop", description: "stop a monitor: /monitor stop <id>" },
+      { value: "logs", description: "show monitor output: /monitor logs <id>" },
+      { value: "list", description: "list all monitors" },
+      { value: "clear", description: "clear stopped monitors" },
     ],
     approve: listShellApprovals().map((approval) => ({ value: approval.id, description: approval.reason })),
     deny: listShellApprovals().map((approval) => ({ value: approval.id, description: approval.reason })),

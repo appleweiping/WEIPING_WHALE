@@ -57,6 +57,14 @@ export class Agent {
     };
   }
 
+
+  setSystemSuffix(suffix: string): void {
+    const sys = this.messages[0];
+    if (!sys || sys.role !== "system") return;
+    const marker = "\n\n[MODE:";
+    const base = sys.content ? (sys.content as string).split(marker)[0] : "";
+    sys.content = suffix ? base + "\n\n[MODE: " + suffix + "]" : base;
+  }
   getMessages(): Message[] {
     return this.messages;
   }

@@ -7,6 +7,7 @@ import {
   normalizeReasoningEffort,
   type Config,
 } from "./config.js";
+import { safeErrorMessage } from "./runtime/safe-text.js";
 
 const SYSTEM_PROMPT = `You are DeepSeek CLI, an interactive coding agent running in the user's terminal.
 You can read/write files, execute commands, and search code to help the user with software engineering tasks.
@@ -220,7 +221,7 @@ export class Agent {
           }
           return { output: JSON.stringify(this.getRuntime()) };
         } catch (err: any) {
-          return { output: `Error: ${err.message}`, error: true };
+          return { output: `Error: ${safeErrorMessage(err)}`, error: true };
         }
       }
     );

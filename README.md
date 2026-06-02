@@ -1,31 +1,19 @@
 <p align="center">
-  <img src="assets/banner.png" alt="DeepSeek CLI" width="720" />
+  <img src="https://raw.githubusercontent.com/appleweiping/deepseek-cli/master/assets/banner.png" alt="DeepSeek CLI" width="720" />
 </p>
 
 <p align="center">
-  <strong>Terminal-native coding agent powered by DeepSeek V4.</strong>
+  <strong>Terminal-native DeepSeek coding agent with honest diagnostics, safe patch previews, MCP, sessions, and agentmemory outbox support.</strong>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/deepseek-cli-agent"><img src="https://img.shields.io/npm/v/deepseek-cli-agent?color=CB3837&label=npm&style=for-the-badge&logo=npm" alt="npm version" /></a>
-  <a href="https://github.com/appleweiping/deepseek-cli/blob/main/LICENSE"><img src="https://img.shields.io/github/license/appleweiping/deepseek-cli?color=blue&style=for-the-badge" alt="License" /></a>
+  <a href="https://github.com/appleweiping/deepseek-cli/blob/master/LICENSE"><img src="https://img.shields.io/github/license/appleweiping/deepseek-cli?color=blue&style=for-the-badge" alt="License" /></a>
 </p>
 
-<p align="center">
-  <picture><img src="assets/tags/zero-sdk.svg" alt="Zero AI SDK deps" height="32" /></picture>
-  <picture><img src="assets/tags/mcp-native.svg" alt="MCP Native" height="32" /></picture>
-  <picture><img src="assets/tags/20kb.svg" alt="20KB bundle" height="32" /></picture>
-</p>
+DeepSeek CLI is a focused coding-agent CLI for people who want a small terminal tool rather than a web app. It can inspect files, search with glob/grep, run shell commands behind approval gates, preview file edits as patches, connect MCP servers, resume saved sessions, and write compact session summaries to agentmemory when available.
 
----
-
-## Overview
-
-DeepSeek CLI is an interactive coding agent that runs in your terminal. It reads and writes files, executes shell commands, searches codebases, and connects to external tools via MCP — all driven by DeepSeek V4 Pro and Flash models.
-
-20KB single-file bundle. Three runtime dependencies. No AI SDK.
-
----
+The project goal is honesty over spectacle: `deepseek --doctor --json` reports exactly what is configured, what is missing, and where local state will be written without exposing API keys or raw provider URLs.
 
 ## Install
 
@@ -33,90 +21,133 @@ DeepSeek CLI is an interactive coding agent that runs in your terminal. It reads
 npm install -g deepseek-cli-agent
 ```
 
-Or run without installing:
-
-```bash
-npx deepseek-cli-agent
-```
-
-Or build from source:
+Or run from source:
 
 ```bash
 git clone https://github.com/appleweiping/deepseek-cli.git
-cd deepseek-cli && npm install && npm run build
-node dist/index.js
+cd deepseek-cli
+npm ci
+npm run build
+node dist/index.js --doctor
 ```
 
----
-
-## Usage
+## First Run
 
 ```bash
-# Set API key
-export DEEPSEEK_API_KEY="sk-..."
-
-# Interactive session
-deepseek
-
-# Single task
-deepseek -t "refactor the auth module to use JWT"
-
-# Model and thinking control
-deepseek --model pro --thinking max -t "review this PR for security issues"
-deepseek --model flash --thinking off -t "summarize these files"
-
-# Diagnostics (no API call)
+export DEEPSEEK_API_KEY="<your-key>"
 deepseek --doctor
-deepseek --models
+deepseek
 ```
 
----
+Useful commands:
 
-## Features
+```bash
+deepseek -t "summarize the architecture of this repo"
+deepseek --model pro --thinking max -t "review this change for security and test gaps"
+deepseek --model flash --thinking off -t "format these notes into markdown"
+deepseek --models
+deepseek --doctor --json
+```
 
-### Built-in Tools
+## What It Does
 
-| Tool | Description |
-|------|-------------|
-| `execute_bash` | Shell execution with approval gate |
-| `read_file` | Read files with line numbers |
-| `write_file` | Create or overwrite files (patch preview in safe mode) |
-| `edit_file` | Exact string replacement (patch preview in safe mode) |
-| `glob` | Find files by pattern |
-| `grep` | Regex content search (ripgrep) |
+| Area | Behavior |
+| --- | --- |
+| Model runtime | DeepSeek V4 Pro/Flash presets, thinking controls, runtime switching tool |
+| File work | `read_file`, `write_file`, `edit_file`, `glob`, `grep` |
+| Shell work | `execute_bash` with blocked-command rules, approval queue, and bounded timeout |
+| Patch safety | File writes default to preview; apply with `/apply <id>` |
+| Sessions | `~/.deepseek-cli/sessions`, named sessions, resume, compact |
+| Memory | agentmemory REST when reachable; local outbox when offline |
+| MCP | stdio MCP servers become normal tools with diagnostics |
+| Terminal UX | slash palette, nested command arguments, mouse support, wrapped-line editing |
 
-### Terminal Editor
+## Safety Profiles
 
-- Wrapped-line editing with visual Up/Down cursor movement
-- Shift-selection, mouse drag selection, one-shot deletion of selected text
-- Command history navigation at line boundaries
-- Slash command palette with scrollable menu, mouse click support, and nested argument selection
+Use `/permission-model <mode>` or the equivalent environment variables.
 
-### Command Palette
+| Profile | Writes | Sandbox | Shell |
+| --- | --- | --- | --- |
+| `safe` | preview | workspace only | ask for risky commands |
+| `read-only` | blocked | read-only | ask for risky commands |
+| `trusted` | direct | unrestricted | auto-run except blocked patterns |
+| `locked` | preview | read-only | never run risky commands |
 
-Type `/` or `\` at any whitespace boundary to open the palette. Supports filtering, keyboard navigation (Up/Down/PageUp/PageDown), mouse wheel scrolling, and click-to-select.
+The default is `safe`. Broad destructive shell commands remain blocked even in permissive modes.
 
-Commands: `/help` `/status` `/doctor` `/tools` `/mcp` `/sessions` `/memory` `/retry` `/permissions` `/permission-model` `/approval` `/sandbox` `/write-mode` `/models` `/model` `/thinking` `/session` `/compact` `/approvals` `/approve` `/deny` `/patches` `/apply` `/reject` `/clear` `/exit`
+## Diagnostics
 
-### Safety Model
+`deepseek --doctor --json` is designed for humans and CI:
 
-Four bundled permission profiles control shell execution, file writes, and sandbox scope:
+```json
+{
+  "ok": true,
+  "version": "0.2.0",
+  "runtime": {
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "high"
+  },
+  "endpoint": {
+    "configured": true,
+    "host": "api.deepseek.com"
+  },
+  "auth": {
+    "api_key": "configured",
+    "source": "env"
+  },
+  "checks": []
+}
+```
 
-| Profile | Writes | Sandbox | Shell Approval |
-|---------|--------|---------|----------------|
-| `safe` | preview | workspace | on-request |
-| `read-only` | blocked | read-only | on-request |
-| `trusted` | direct | unrestricted | auto |
-| `locked` | preview | read-only | never |
+The command exits non-zero when required checks fail. It does not print API keys, bearer tokens, or full provider URLs.
 
-Risky shell commands are queued for review (`/approvals` → `/approve <id>`). File edits create patch previews (`/patches` → `/apply <id>`).
+## Configuration
 
-### MCP Integration
+DeepSeek CLI loads the first config file found in this order:
 
-Connect any MCP-compatible server. The agent discovers tools at startup and exposes them alongside built-in tools.
+1. `DEEPSEEK_CONFIG`
+2. `./deepseek-cli.toml`
+3. `./.deepseek-cli.toml`
+4. `~/.deepseek-cli/config.toml`
+5. packaged fallback `config.toml`
+
+Example:
 
 ```toml
-# ~/.deepseek-cli/config.toml
+[llm]
+model = "flash"
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
+temperature = 0.3
+max_tokens = 4096
+request_timeout_ms = 120000
+thinking = "enabled"
+reasoning_effort = "high"
+
+[agent]
+workspace = "."
+max_iterations = 50
+```
+
+Environment overrides:
+
+| Variable | Values |
+| --- | --- |
+| `DEEPSEEK_API_KEY` | provider API key |
+| `DEEPSEEK_MODEL` | `pro`, `flash`, `chat`, `reasoner`, or a full model name |
+| `DEEPSEEK_THINKING` | `auto`, `on`, `off`, `high`, `max` |
+| `DEEPSEEK_REASONING_EFFORT` | `high`, `max` |
+| `DEEPSEEK_BASE_URL` | OpenAI-compatible DeepSeek endpoint |
+| `DEEPSEEK_APPROVAL_MODE` | `on-request`, `auto`, `never` |
+| `DEEPSEEK_WRITE_MODE` | `preview`, `direct` |
+| `DEEPSEEK_SANDBOX_MODE` | `workspace-write`, `read-only`, `unrestricted` |
+| `AGENTMEMORY_URL` | active agentmemory endpoint |
+| `DEEPSEEK_MEMORY_OUTBOX_DIR` | local memory outbox override |
+
+## MCP
+
+```toml
 [mcp_servers.agentmemory]
 command = "npx"
 args = ["-y", "@agentmemory/mcp"]
@@ -125,82 +156,71 @@ args = ["-y", "@agentmemory/mcp"]
 AGENTMEMORY_URL = "http://localhost:3111"
 ```
 
-`deepseek --doctor` reports MCP connection status and diagnostics.
+Run `/mcp status`, `/mcp reconnect`, or `deepseek --doctor --json` to inspect connection state. Failed MCP servers do not crash the CLI; they show safe error metadata.
 
-### Sessions
+## Relationship To The Other Vipin Tools
 
-Transcripts are persisted under `~/.deepseek-cli/sessions/`. Name a session with `--session <id>`, resume with `--resume <id>`. Network failures auto-save the transcript. Use `/compact [n]` to summarize older context.
+`vipin-council` is the multi-model debate and orchestration layer. It benefits from richer provider health and cross-model review.
 
----
+`deepseek-cli` is the lightweight terminal worker. It is best for fast local text/code tasks, patch previews, skill-guided maintenance, and inexpensive DeepSeek runs.
 
-## Configuration
+`vipin-lab` is the experiment/workbench surface. DeepSeek CLI can help maintain it, but the lab remains the place where reproducible experiment workflows should be exposed.
 
-```toml
-# ~/.deepseek-cli/config.toml
-[llm]
-model = "deepseek-v4-flash"
-api_key_env = "DEEPSEEK_API_KEY"
-base_url = "https://api.deepseek.com"
-temperature = 0.3
-max_tokens = 4096
-thinking = "enabled"
-reasoning_effort = "high"
+The three projects should share operating discipline, not implementation bulk. This CLI intentionally keeps its core small and transparent.
 
-[agent]
-max_iterations = 50
-workspace = "."
+## Design Notes
+
+This release was shaped by reading concrete source modules from mature coding-agent CLIs instead of copying their surface marketing:
+
+| Project | Source patterns inspected | Local adaptation |
+| --- | --- | --- |
+| Google Gemini CLI | `packages/cli/src/config/settings-validation.ts`, `packages/core/src/config/storage.ts`, `packages/core/src/utils/retry.ts`, `packages/core/src/utils/errorParsing.ts` | compact config checks, safe doctor report, bounded retry behavior |
+| Aider | `aider/run_cmd.py`, `aider/models.py`, `tests/basic/test_run_cmd.py`, `tests/basic/test_models.py` | cross-platform shell output discipline, model preset clarity |
+| OpenCode | `packages/opencode/src/config/config.ts`, `packages/opencode/src/util/error.ts`, `packages/opencode/src/session/message-error.ts`, `packages/opencode/src/provider/model-status.ts` | safe error metadata, explicit runtime status, CI release scan |
+
+## Release Notes
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+### 0.2.0 Upgrade Notes
+
+- `deepseek --doctor --json` now returns a structured diagnostic object and exits non-zero when required checks fail.
+- agentmemory is no longer mirrored into legacy markdown memory paths. Offline saves go to `~/.deepseek-cli/memory-outbox` or `DEEPSEEK_MEMORY_OUTBOX_DIR`.
+- Provider and MCP errors are redacted by default. Use explicit debug flags only when you are comfortable with local diagnostic details.
+- The packaged fallback config is public-safe and generic; personal/team operating rules belong in user or project config files.
+
+### Known Limitations
+
+- This package does not bundle a UI server; it is a terminal agent.
+- E2E tests avoid real DeepSeek API calls. Provider availability is validated through config diagnostics, not live completions.
+- Shell safety is pattern-based and conservative. Treat `trusted` mode as local full trust.
+- MCP servers only receive explicitly configured env plus a minimal process environment.
+
+## Development
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm pack --dry-run
 ```
 
-### Environment Variables
+`npm test` runs:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEEPSEEK_API_KEY` | API key (required) | — |
-| `DEEPSEEK_MODEL` | `pro`, `flash`, `chat`, `reasoner`, or full model name | `deepseek-v4-flash` |
-| `DEEPSEEK_THINKING` | `auto`, `on`, `off`, `high`, `max` | `enabled` |
-| `DEEPSEEK_BASE_URL` | API endpoint | `https://api.deepseek.com` |
-| `DEEPSEEK_APPROVAL_MODE` | `on-request`, `auto`, `never` | `on-request` |
-| `DEEPSEEK_WRITE_MODE` | `preview`, `direct` | `preview` |
-| `DEEPSEEK_SANDBOX_MODE` | `workspace-write`, `read-only`, `unrestricted` | `workspace-write` |
+1. bundle build
+2. no-network E2E CLI checks
+3. package install smoke test
+4. release scan for stale paths, secret-looking values, README/package mismatch, and outdated size claims
 
-### Model Presets
+## Maintenance Skill
 
-| Preset | Model | Thinking |
-|--------|-------|----------|
-| `pro` | deepseek-v4-pro | enabled |
-| `flash` | deepseek-v4-flash | enabled |
-| `chat` | deepseek-v4-flash | disabled |
-| `reasoner` | deepseek-v4-flash | enabled |
+This repo includes `.codex/skills/deepseek-cli/SKILL.md`. Use it when planning, designing, developing, testing, releasing, maintaining, monitoring, and iterating this project. The skill requires:
 
-Switch at runtime with `/model <preset>` and `/thinking <mode>`.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────┐
-│  Terminal UI                                  │
-│  • Raw data mouse interception               │
-│  • Scrollable command palette                │
-│  • Wrapped-line editor with selection        │
-├─────────────────────────────────────────────┤
-│  Agent Loop                                  │
-│  • Message → tool calls → repeat            │
-│  • Auto model/thinking switching             │
-├──────────────────┬──────────────────────────┤
-│  Built-in Tools  │  MCP Client (stdio)       │
-│  • bash          │  • Any MCP server         │
-│  • file r/w/edit │  • agentmemory            │
-│  • glob / grep   │  • Custom tools           │
-├──────────────────┴──────────────────────────┤
-│  DeepSeek API (OpenAI-compatible, native fetch) │
-└─────────────────────────────────────────────┘
-```
-
-20KB bundle. Zero AI SDK dependencies. Three runtime deps: `fast-xml-parser`, `fastq`, `toml`.
-
----
+- live source scan before claims
+- concrete open-source code reference intake for non-trivial upgrades
+- strict local verification
+- post-batch multi-review scoring before commit
+- commit and push after accepted changes
 
 ## License
 

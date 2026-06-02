@@ -5,6 +5,8 @@
  * Commands: /monitor start <cmd> | /monitor list | /monitor stop <id> | /monitor logs <id>
  */
 import { spawn, type ChildProcess } from "child_process";
+import { safeErrorMessage } from "../runtime/safe-text.js";
+import { classifyShellCommand, createShellApproval, getApprovalMode } from "../safety/approval.js";
 
 export interface MonitorEntry {
   id: string;
@@ -31,6 +33,7 @@ function newId(): string {
 
 export function monitorStart(
   command: string,
+  timeoutMs = 600_000,
   onEvent?: (id: string, event: MonitorEvent) => void
 ): MonitorEntry {
   const id = newId();
@@ -42,11 +45,14 @@ export function monitorStart(
     events: [],
   };
 
-  const [cmd, ...args] = command.split(/\s+/);
-  const child = spawn(cmd, args, {
+  const child = spawn(command, {
     shell: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const timer = setTimeout(() => {
+    addEvent("error", `Monitor timed out after ${timeoutMs}ms`);
+    child.kill();
+  }, timeoutMs);
 
   entry.process = child;
   monitors.set(id, entry);
@@ -72,14 +78,16 @@ export function monitorStart(
   });
 
   child.on("exit", (code) => {
+    clearTimeout(timer);
     entry.status = code === 0 ? "stopped" : "error";
     entry.exitCode = code ?? undefined;
     addEvent("exit", `Process exited with code ${code}`);
   });
 
   child.on("error", (err) => {
+    clearTimeout(timer);
     entry.status = "error";
-    addEvent("error", err.message);
+    addEvent("error", safeErrorMessage(err));
   });
 
   return entry;
@@ -152,7 +160,24 @@ export function handleMonitorCommand(
     case "start":
     case "run": {
       if (!rest) return "Usage: /monitor start <command>";
-      const entry = monitorStart(rest, onEvent);
+      const risk = classifyShellCommand(rest);
+      if (risk.level === "blocked") return `  Blocked dangerous monitor command: ${risk.reason}`;
+      const mode = getApprovalMode();
+      if (risk.level === "approval_required" && mode === "never") {
+        return [
+          `  Monitor command not run: ${risk.reason}`,
+          "  Current approval mode is never; risky monitor commands are disabled.",
+        ].join("\n");
+      }
+      if (risk.level === "approval_required" && mode !== "auto") {
+        const approval = createShellApproval(rest, 600_000, `monitor command: ${risk.reason}`);
+        return [
+          `  Monitor approval required: ${approval.id}`,
+          `  Reason: ${risk.reason}`,
+          `  Review with /approvals, run once with /approve ${approval.id}, or reject with /deny ${approval.id}.`,
+        ].join("\n");
+      }
+      const entry = monitorStart(rest, 600_000, onEvent);
       return `  \x1b[32m●\x1b[0m [${entry.id}] Started: ${rest}\n  Use /monitor logs ${entry.id} to see output`;
     }
     case "stop": {

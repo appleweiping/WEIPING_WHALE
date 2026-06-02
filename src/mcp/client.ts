@@ -1,6 +1,8 @@
 import { spawn, ChildProcess } from "child_process";
 import type { ToolDef } from "../llm/deepseek.js";
 import type { ToolResult } from "../tools/registry.js";
+import { VERSION } from "../runtime/version.js";
+import { safeErrorMessage } from "../runtime/safe-text.js";
 
 interface MCPTool {
   name: string;
@@ -21,7 +23,7 @@ export class MCPClient {
   }
 
   async connect(timeoutMs = 30000): Promise<void> {
-    const mergedEnv = { ...process.env, ...this.env };
+    const mergedEnv = { ...baseMcpEnv(), ...this.env };
     this.proc = spawn(this.command, this.args, { env: mergedEnv, stdio: ["pipe", "pipe", "pipe"] });
 
     this.proc.stdout!.on("data", (chunk) => {
@@ -44,7 +46,7 @@ export class MCPClient {
     const initResult = await this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "deepseek-cli", version: "0.1.0" },
+      clientInfo: { name: "deepseek-cli", version: VERSION },
     }, timeoutMs);
 
     await this.notify("notifications/initialized", {});
@@ -70,7 +72,7 @@ export class MCPClient {
       const text = result.content?.map((c: any) => c.text || JSON.stringify(c)).join("\n") || "";
       return { output: text };
     } catch (err: any) {
-      return { output: `MCP error: ${err.message}`, error: true };
+      return { output: `MCP error: ${safeErrorMessage(err)}`, error: true };
     }
   }
 
@@ -80,21 +82,31 @@ export class MCPClient {
   }
 
   private send(message: any) {
+    if (!this.proc?.stdin) throw new Error("MCP process is not connected");
     const json = JSON.stringify(message);
-    this.proc!.stdin!.write(json + "\n");
+    this.proc.stdin.write(json + "\n");
   }
 
   private request(method: string, params: any, timeoutMs = 30000): Promise<any> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject });
-      this.send({ jsonrpc: "2.0", id, method, params });
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
           reject(new Error(`MCP request ${method} timed out after ${timeoutMs}ms`));
         }
       }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.send({ jsonrpc: "2.0", id, method, params });
     });
   }
 
@@ -120,4 +132,29 @@ export class MCPClient {
       } catch {}
     }
   }
+}
+
+function baseMcpEnv(): Record<string, string> {
+  const names = [
+    "PATH",
+    "Path",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "SystemRoot",
+    "ComSpec",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "NODE_PATH",
+  ];
+  const env: Record<string, string> = {};
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
 }

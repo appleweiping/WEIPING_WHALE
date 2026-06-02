@@ -1,6 +1,7 @@
 ﻿import { EventEmitter } from "events";
 import * as readline from "readline";
 import { PassThrough } from "stream";
+import { VERSION } from "../runtime/version.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -27,7 +28,7 @@ export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) 
   const w = Math.min(process.stdout.columns || 80, 60);
   const line = "─".repeat(w);
   console.log();
-  console.log(`  ${BLUE}${BOLD}DeepSeek CLI${RESET}  ${DIM}v1${RESET}`);
+  console.log(`  ${BLUE}${BOLD}DeepSeek CLI${RESET}  ${DIM}v${VERSION}${RESET}`);
   console.log(`  ${DIM}${line}${RESET}`);
   console.log(`  ${DIM}model${RESET}     ${GREEN}${runtime.model}${RESET}`);
   console.log(`  ${DIM}thinking${RESET}   ${YELLOW}${formatThinking(runtime)}${RESET}`);

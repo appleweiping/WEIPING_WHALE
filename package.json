@@ -1,7 +1,7 @@
 {
   "name": "deepseek-cli-agent",
-  "version": "0.1.0",
-  "description": "Interactive terminal coding agent powered by DeepSeek with native MCP support and shared memory",
+  "version": "0.2.0",
+  "description": "Terminal-native DeepSeek coding agent with honest diagnostics, safe patch previews, MCP, sessions, and agentmemory outbox support",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -12,7 +12,9 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
-    "test": "npm run build && node scripts/e2e.mjs"
+    "scan:release": "node scripts/release-scan.mjs",
+    "smoke:package": "node scripts/package-smoke.mjs",
+    "test": "npm run build && node scripts/e2e.mjs && npm run smoke:package && npm run scan:release"
   },
   "keywords": [
     "deepseek",
@@ -25,11 +27,15 @@
     "tool-use",
     "agentmemory"
   ],
-  "author": "",
+  "author": "appleweiping",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/appleweiping/deepseek-cli"
+    "url": "git+https://github.com/appleweiping/deepseek-cli.git"
+  },
+  "homepage": "https://github.com/appleweiping/deepseek-cli#readme",
+  "bugs": {
+    "url": "https://github.com/appleweiping/deepseek-cli/issues"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -38,6 +44,7 @@
     "dist/",
     "config.toml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "dependencies": {

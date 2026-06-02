@@ -3,6 +3,7 @@ import { resolve, dirname } from "path";
 import { registerTool } from "./registry.js";
 import { createFilePatch, formatPatchCreated, getWriteMode } from "../safety/patches.js";
 import { assertWritablePath } from "../safety/sandbox.js";
+import { safeErrorMessage } from "../runtime/safe-text.js";
 
 registerTool(
   "write_file",
@@ -27,7 +28,7 @@ registerTool(
       writeFileSync(abs, content, "utf-8");
       return { output: `Written ${content.length} chars to ${abs}` };
     } catch (err: any) {
-      return { output: `Error: ${err.message}`, error: true };
+      return { output: `Error: ${safeErrorMessage(err)}`, error: true };
     }
   }
 );
@@ -67,7 +68,7 @@ registerTool(
       writeFileSync(abs, updated, "utf-8");
       return { output: `Edited ${abs}` };
     } catch (err: any) {
-      return { output: `Error: ${err.message}`, error: true };
+      return { output: `Error: ${safeErrorMessage(err)}`, error: true };
     }
   }
 );

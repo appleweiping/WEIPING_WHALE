@@ -2,6 +2,7 @@ import fg from "fast-glob";
 import { readFileSync } from "fs";
 import { spawn } from "child_process";
 import { registerTool } from "./registry.js";
+import { safeErrorMessage } from "../runtime/safe-text.js";
 
 registerTool(
   "glob",
@@ -25,7 +26,7 @@ registerTool(
       if (files.length === 0) return { output: "No files matched" };
       return { output: files.slice(0, 100).join("\n") };
     } catch (err: any) {
-      return { output: `Error: ${err.message}`, error: true };
+      return { output: `Error: ${safeErrorMessage(err)}`, error: true };
     }
   }
 );
@@ -65,7 +66,7 @@ registerTool(
       proc.on("error", () => {
         fallbackGrep(pattern, path || ".", fileGlob)
           .then(resolve)
-          .catch((err: any) => resolve({ output: `grep fallback failed: ${err.message}`, error: true }));
+          .catch((err: any) => resolve({ output: `grep fallback failed: ${safeErrorMessage(err)}`, error: true }));
       });
     });
   }

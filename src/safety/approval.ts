@@ -19,8 +19,9 @@ export interface PendingShellApproval {
 const pendingShellApprovals = new Map<string, PendingShellApproval>();
 
 const blockedPatterns: Array<[RegExp, string]> = [
-  [/\brm\s+-rf\s+\//i, "recursive delete from filesystem root"],
-  [/\bRemove-Item\b.*\b-Recurse\b.*\b(C:\\|D:\\|\/|\*)/i, "recursive PowerShell delete over a broad target"],
+  [/\brm\b(?=.*(?:^|\s)-[A-Za-z-]*r)(?=.*(?:^|\s)-[A-Za-z-]*f)(?=.*(?:^|\s)(?:\/(?:\*)?|\.{1,2}(?:[\\/]\*)?(?:[\\/])?|\*|[A-Za-z]:(?:[\\/](?:\*)?)?)(?=\s|$))/i, "recursive delete over a broad target"],
+  [/\b(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\b(?=.*(?:^|\s)-(?:r|recurse)\b)(?=.*(?:^|\s)(?:[A-Za-z]:(?:[\\/](?:\*)?)?|\/(?:\*)?|\.{1,2}(?:[\\/]\*)?(?:[\\/])?|\*)(?=\s|$))/i, "recursive PowerShell delete over a broad target"],
+  [/\bgit\s+clean\b(?=.*(?:^|\s)-[A-Za-z-]*f)(?=.*(?:^|\s)-[A-Za-z-]*(?:d|x))/i, "broad git clean command"],
   [/\bformat\b\s+[a-z]:/i, "disk format command"],
   [/\bdiskpart\b/i, "disk partition command"],
   [/\bshutdown\b|\bRestart-Computer\b|\bStop-Computer\b/i, "system shutdown or restart"],
@@ -32,9 +33,9 @@ const blockedPatterns: Array<[RegExp, string]> = [
 ];
 
 const approvalPatterns: Array<[RegExp, string]> = [
-  [/\brm\b|\bdel\b|\brmdir\b|\bRemove-Item\b/i, "delete command"],
+  [/\b(?:rm|ri|del|erase|rmdir|rd|Remove-Item)\b/i, "delete command"],
   [/\bgit\s+(reset|clean|checkout|rebase)\b/i, "history or working-tree rewrite"],
-  [/\b(mv|move|cp|copy|xcopy|robocopy|Set-Content|Out-File)\b|(^|[^>])>[^>]/i, "file mutation or shell redirection"],
+  [/\b(?:mv|mi|move|cp|cpi|copy|xcopy|robocopy|ni|New-Item|sc|Set-Content|ac|Add-Content|si|Set-Item|sp|Set-ItemProperty|rp|Remove-ItemProperty|Out-File)\b|(^|[^>])>[^>]/i, "file mutation or shell redirection"],
   [/\b(npm|pnpm|yarn|bun)\s+(install|add|remove|publish)\b|\bpip\s+install\b|\buv\s+(pip\s+)?install\b/i, "dependency or package registry operation"],
   [/\bgit\s+push\b.*(--force|-f|\+[^\s]+)/i, "force push"],
   [/\bnpm\s+publish\b|\bpnpm\s+publish\b|\byarn\s+npm\s+publish\b/i, "package publish"],

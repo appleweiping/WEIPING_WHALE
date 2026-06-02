@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 import { EventEmitter } from "events";
-import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig, type Config } from "./config.js";
+import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig, validateConfig, type Config } from "./config.js";
 import { Agent } from "./agent.js";
 import { MCPManager } from "./mcp/manager.js";
 import { getToolDefs } from "./tools/registry.js";
-import { formatPatchList, applyFilePatch, rejectFilePatch } from "./safety/patches.js";
-import { getApprovalMode, listShellApprovals, rejectShellApproval, setApprovalMode, takeShellApproval } from "./safety/approval.js";
+import { formatPatchList, applyFilePatch, createFilePatch, rejectFilePatch } from "./safety/patches.js";
+import { classifyShellCommand, getApprovalMode, listShellApprovals, rejectShellApproval, setApprovalMode, takeShellApproval } from "./safety/approval.js";
 import { getWriteMode, setWriteMode } from "./safety/patches.js";
 import { getSandboxMode, setSandboxMode } from "./safety/sandbox.js";
 import { runShellCommand } from "./tools/bash.js";
-import { createSessionId, formatSessionInfo, listSessions, loadSession, saveSession } from "./session.js";
-import { saveSessionMemory, type SessionMemoryResult } from "./memory.js";
+import { createSessionId, formatSessionInfo, listSessions, loadSession, saveSession, sessionDir } from "./session.js";
+import { memoryDiagnostics, saveSessionMemory, type SessionMemoryResult } from "./memory.js";
+import { VERSION } from "./runtime/version.js";
+import { endpointConfigured, endpointHost, safeErrorMessage } from "./runtime/safe-text.js";
 import { handleTodoCommand } from "./tools/todo.js";
 import { handleMonitorCommand, type MonitorEvent } from "./tools/monitor.js";
 import {
@@ -36,8 +38,6 @@ import "./tools/file-read.js";
 import "./tools/file-write.js";
 import "./tools/glob.js";
 
-const VERSION = "0.1.0";
-
 // ── Execution mode ────────────────────────────────────────────────────────────
 type ExecMode = "auto" | "plan" | "ask";
 let _execMode: ExecMode = "auto";
@@ -45,8 +45,9 @@ export function getExecMode(): ExecMode { return _execMode; }
 export function setExecMode(mode: ExecMode) { _execMode = mode; }
 
 // ── Image attachment queue ────────────────────────────────────────────────────
-import { existsSync, readFileSync } from "fs";
-import { extname } from "path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { extname, join } from "path";
+import { tmpdir } from "os";
 const _pendingImages: { path: string; base64: string; mimeType: string }[] = [];
 export function attachImage(filePath: string): string {
   if (!existsSync(filePath)) return `File not found: ${filePath}`;
@@ -77,6 +78,11 @@ async function main() {
     process.exit(0);
   }
 
+  if (args.includes("--self-test-runtime")) {
+    await runRuntimeSelfTest();
+    process.exit(0);
+  }
+
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
     process.exit(0);
@@ -87,7 +93,7 @@ async function main() {
     cwdOverride = readFlag(args, "--cwd") ?? readFlag(args, "--workspace");
     if (cwdOverride) changeDirectory(cwdOverride);
   } catch (err: any) {
-    printCliError(err.message, json);
+    printCliError(safeErrorMessage(err), json);
     process.exit(1);
   }
 
@@ -105,14 +111,14 @@ async function main() {
     try {
       changeDirectory(config.agent.workspace);
     } catch (err: any) {
-      printCliError(err.message, json);
+      printCliError(safeErrorMessage(err), json);
       process.exit(1);
     }
   }
   try {
     applyRuntimeOverrides(config, parseRuntimeArgs(args));
   } catch (err: any) {
-    printCliError(err.message, json);
+    printCliError(safeErrorMessage(err), json);
     process.exit(1);
   }
 
@@ -123,7 +129,7 @@ async function main() {
     }
     printDoctor(config, json, doctorMcpManager);
     doctorMcpManager.disconnectAll();
-    process.exit(config.llm.api_key ? 0 : 1);
+    process.exit(validateConfig(config).some((check) => check.level === "error") ? 1 : 0);
   }
 
   if (!config.llm.api_key) {
@@ -177,9 +183,10 @@ async function main() {
         printAssistant(reply);
       }
     } catch (err: any) {
-      await persistSnapshot("error", "single task failed; resume this session and retry after the network recovers", err.message);
-      if (json) console.error(JSON.stringify({ ok: false, session: sessionId, error: { message: err.message } }, null, 2));
-      else printCliError(err.message, false);
+      const message = safeErrorMessage(err);
+      await persistSnapshot("error", "single task failed; resume this session and retry after the network recovers", message);
+      if (json) console.error(JSON.stringify({ ok: false, session: sessionId, error: { message } }, null, 2));
+      else printCliError(message, false);
       mcpManager.disconnectAll();
       process.exit(1);
     }
@@ -210,15 +217,16 @@ async function main() {
       await persistSnapshot("completed", "assistant reply completed");
       printAssistant(reply);
     } catch (err: any) {
-      printError(`Error: ${err.message}`);
-      const result = await persistSnapshot("error", "assistant request failed; /retry can resend the last user message", err.message);
+      const message = safeErrorMessage(err);
+      printError(`Error: ${message}`);
+      const result = await persistSnapshot("error", "assistant request failed; /retry can resend the last user message", message);
       printMemoryResult(result);
     }
     rl.prompt();
   };
 
   rl.on("line", (line) => {
-    lineQueue = lineQueue.then(() => processLine(line)).catch((err: any) => printError(`Error: ${err.message}`));
+    lineQueue = lineQueue.then(() => processLine(line)).catch((err: any) => printError(`Error: ${safeErrorMessage(err)}`));
   });
 
   rl.on("close", () => void lineQueue.finally(() => shutdown("closed")));
@@ -258,11 +266,11 @@ function runEditorSelfTest() {
   const promptOutput = new FakeOutput() as unknown as NodeJS.WriteStream;
   const promptReader = new TerminalLineReader(promptInput, promptOutput, ({ line, cursor }) => buildSlashMenu(line, cursor));
   promptReader.prompt();
-  for (const char of Array.from("hello /mo")) promptReader.debugKey(char, { name: char });
+  for (const char of Array.from("hello /thin")) promptReader.debugKey(char, { name: char });
   const menu = promptReader.debugState().slashLabels;
-  if (!menu.some((label) => label.startsWith("/model"))) throw new Error("slash palette did not expose /model");
+  if (!menu.some((label) => label.startsWith("/thinking"))) throw new Error("slash palette did not expose /thinking");
   promptReader.debugKey(undefined, { name: "tab" });
-  if (promptReader.debugState().line !== "hello /model ") throw new Error(`slash accept failed: ${promptReader.debugState().line}`);
+  if (promptReader.debugState().line !== "hello /thinking ") throw new Error(`slash accept failed: ${promptReader.debugState().line}`);
   promptReader.close();
 
   const backslashInput = new FakeInput() as unknown as NodeJS.ReadStream;
@@ -418,6 +426,113 @@ function runEditorSelfTest() {
   }
 
   console.log(JSON.stringify({ ok: true, slash: true, backslash: true, nested: true, mcp_nested: true, memory_nested: true, selection_delete: true, vertical_cursor: true, mouse_swallow: true, split_mouse_swallow: true, menu_mouse_click: true, scroll_wheel: true, rapid_scroll: true, menu_scroll: true }));
+}
+
+async function runRuntimeSelfTest() {
+  const original = {
+    cwd: process.cwd(),
+    approval: process.env.DEEPSEEK_APPROVAL_MODE,
+    sandbox: process.env.DEEPSEEK_SANDBOX_MODE,
+    write: process.env.DEEPSEEK_WRITE_MODE,
+    memoryUrl: process.env.AGENTMEMORY_URL,
+    outbox: process.env.DEEPSEEK_MEMORY_OUTBOX_DIR,
+  };
+  const workspace = mkdtempSync(join(tmpdir(), "deepseek-cli-runtime-self-test-"));
+  try {
+    process.chdir(workspace);
+    process.env.DEEPSEEK_APPROVAL_MODE = "on-request";
+    process.env.DEEPSEEK_SANDBOX_MODE = "workspace-write";
+    process.env.DEEPSEEK_WRITE_MODE = "preview";
+
+    const sample = join(workspace, "sample.txt");
+    writeFileSync(sample, "before", "utf-8");
+    const patch = createFilePatch("edit", sample, "after");
+    if (!formatPatchList().includes(patch.id)) throw new Error("patch preview was not listed");
+    const applied = applyFilePatch(patch.id);
+    if (!applied.ok) throw new Error(`patch did not apply: ${applied.message}`);
+    if (readFileSync(sample, "utf-8") !== "after") throw new Error("patch apply did not update file content");
+
+    const rejected = createFilePatch("write", join(workspace, "reject.txt"), "nope");
+    if (!rejectFilePatch(rejected.id)) throw new Error("patch reject failed");
+    if (existsSync(join(workspace, "reject.txt"))) throw new Error("rejected write patch created a file");
+
+    const classifierCases: Array<[string, "approval_required" | "blocked"]> = [
+      ["ri -r .\\tmp", "approval_required"],
+      ["ni pwn.txt -Value x", "approval_required"],
+      ["sc pwn.txt x", "approval_required"],
+      ["mi a b", "approval_required"],
+      ["Remove-Item -Recurse C:\\", "blocked"],
+      ["Remove-Item -Recurse C:\\*", "blocked"],
+      ["Remove-Item -Recurse .", "blocked"],
+      ["rm -rf .", "blocked"],
+      ["rm -rf ./*", "blocked"],
+      ["rm -rf *", "blocked"],
+      ["rm -rf /*", "blocked"],
+      ["Remove-Item -Recurse .\\*", "blocked"],
+      ["git clean -fdx", "blocked"],
+    ];
+    for (const [command, expected] of classifierCases) {
+      const actual = classifyShellCommand(command).level;
+      if (actual !== expected) throw new Error(`shell classifier mismatch for ${command}: ${actual}`);
+    }
+
+    const blockedMonitor = handleMonitorCommand("start rm -rf /");
+    if (!blockedMonitor.includes("Blocked dangerous monitor command")) throw new Error(`monitor did not block dangerous command: ${blockedMonitor}`);
+    const approvalMonitor = handleMonitorCommand("start rm sample.txt");
+    if (!approvalMonitor.includes("Monitor approval required")) throw new Error(`monitor did not require approval: ${approvalMonitor}`);
+    const monitorApproval = listShellApprovals().find((item) => item.reason.startsWith("monitor command:"));
+    if (!monitorApproval) throw new Error("monitor approval was not queued in on-request mode");
+    process.env.DEEPSEEK_APPROVAL_MODE = "never";
+    const deniedApproval = await runApprovedShellCommand(monitorApproval.id);
+    if (!deniedApproval.includes("approval mode is never")) throw new Error(`approve path did not honor never mode: ${deniedApproval}`);
+    if (listShellApprovals().some((item) => item.id === monitorApproval.id)) throw new Error("never-mode approval was not consumed");
+    const neverMonitor = handleMonitorCommand("start rm sample.txt");
+    if (!neverMonitor.includes("risky monitor commands are disabled")) throw new Error(`monitor queued in never mode: ${neverMonitor}`);
+    if (listShellApprovals().some((item) => item.reason.startsWith("monitor command:"))) throw new Error("monitor approval was queued in never mode");
+    process.env.DEEPSEEK_APPROVAL_MODE = "on-request";
+
+    const outbox = join(workspace, "outbox");
+    process.env.AGENTMEMORY_URL = "http://127.0.0.1:9";
+    process.env.DEEPSEEK_MEMORY_OUTBOX_DIR = outbox;
+    const fakeSecret = ["sk", Date.now().toString(36), "test", "secret", "should", "redact"].join("-");
+    const memory = await saveSessionMemory({
+      sessionId: "runtime-self-test",
+      cwd: workspace,
+      runtime: { model: "deepseek-v4-flash", thinking: "enabled", reasoning_effort: "high" },
+      messages: [{ role: "user", content: `hello ${fakeSecret}` }],
+      status: "manual",
+      note: "runtime self-test",
+    });
+    if (!memory.fallbackPath || !memory.fallbackPath.startsWith(outbox)) throw new Error("memory outbox fallback path was not used");
+    const memoryText = readFileSync(memory.fallbackPath, "utf-8");
+    if (memoryText.includes(fakeSecret)) throw new Error("memory outbox did not redact secret-looking text");
+
+    console.log(JSON.stringify({ ok: true, runtime: true, patch: true, monitor_safety: true, memory_outbox: true }));
+  } finally {
+    process.chdir(original.cwd);
+    restoreEnv("DEEPSEEK_APPROVAL_MODE", original.approval);
+    restoreEnv("DEEPSEEK_SANDBOX_MODE", original.sandbox);
+    restoreEnv("DEEPSEEK_WRITE_MODE", original.write);
+    restoreEnv("AGENTMEMORY_URL", original.memoryUrl);
+    restoreEnv("DEEPSEEK_MEMORY_OUTBOX_DIR", original.outbox);
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
+async function runApprovedShellCommand(id: string): Promise<string> {
+  const approval = takeShellApproval(id);
+  if (!approval) return `No pending shell approval: ${id}`;
+
+  const risk = classifyShellCommand(approval.command);
+  if (risk.level === "blocked") {
+    return `Approved shell command not run: ${risk.reason}`;
+  }
+  if (risk.level === "approval_required" && getApprovalMode() === "never") {
+    return `Approved shell command not run: approval mode is never; risky shell commands are disabled.`;
+  }
+
+  const result = await runShellCommand(approval.command, approval.timeout);
+  return result.output;
 }
 
 interface CommandContext {
@@ -617,13 +732,8 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
       case "approve": {
         if (!arg) printError("Usage: /approve <id>");
         else {
-          const approval = takeShellApproval(arg);
-          if (!approval) printError(`No pending shell approval: ${arg}`);
-          else {
-            printInfo(`Running approved shell command ${arg}...`);
-            const result = await runShellCommand(approval.command, approval.timeout);
-            console.log(result.output);
-          }
+          printInfo(`Reviewing shell approval ${arg}...`);
+          console.log(await runApprovedShellCommand(arg));
         }
         return true;
       }
@@ -713,7 +823,7 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         return false;
     }
   } catch (err: any) {
-    printError(`Error: ${err.message}`);
+    printError(`Error: ${safeErrorMessage(err)}`);
     return true;
   }
 }
@@ -978,17 +1088,31 @@ function isWhitespace(char: string | undefined): boolean {
 function printDoctor(config: Config, json = false, mcpManager?: MCPManager) {
   const configuredMcpServers = Object.keys(config.mcp_servers).length;
   const hasApiKey = Boolean(config.llm.api_key);
+  const checks = validateConfig(config);
+  const ok = !checks.some((check) => check.level === "error");
   const payload = {
-    ok: hasApiKey,
+    ok,
     version: VERSION,
-    model: config.llm.model,
-    thinking: config.llm.thinking,
-    reasoning_effort: config.llm.reasoning_effort,
-    base_url: config.llm.base_url,
-    config_path: config.config_path ?? null,
+    node: process.version,
+    platform: `${process.platform}-${process.arch}`,
+    runtime: {
+      model: config.llm.model,
+      thinking: config.llm.thinking,
+      reasoning_effort: config.llm.reasoning_effort,
+    },
+    endpoint: {
+      configured: endpointConfigured(config.llm.base_url),
+      host: endpointHost(config.llm.base_url),
+    },
+    paths: {
+      cwd: process.cwd(),
+      config_path: config.config_path ?? null,
+      session_dir: sessionDir(),
+      memory_outbox_dir: memoryDiagnostics().outbox_dir,
+    },
     auth: {
       api_key: hasApiKey ? "configured" : "missing",
-      source: process.env.DEEPSEEK_API_KEY ? "env" : config.llm.api_key ? "config" : "missing",
+      source: hasApiKey ? config.llm.api_key_source : "missing",
     },
     cwd: process.cwd(),
     safety: {
@@ -996,10 +1120,12 @@ function printDoctor(config: Config, json = false, mcpManager?: MCPManager) {
       write_mode: getWriteMode(),
       sandbox_mode: getSandboxMode(),
     },
+    memory: memoryDiagnostics(),
     mcp_servers: configuredMcpServers,
     mcp_configured: Object.keys(config.mcp_servers),
     mcp_diagnostics: mcpManager?.getDiagnostics() ?? [],
     builtin_tools: getToolDefs().map((tool) => tool.function.name),
+    checks,
   };
   if (json) {
     console.log(JSON.stringify(payload, null, 2));
@@ -1070,6 +1196,7 @@ function readPositionalTask(args: string[]): string | null {
 }
 
 function printCliError(message: string, json = false) {
+  message = safeErrorMessage(message);
   if (json) {
     console.error(JSON.stringify({ ok: false, error: { message } }, null, 2));
     return;
@@ -1081,11 +1208,16 @@ function changeDirectory(path: string) {
   try {
     process.chdir(path);
   } catch (err: any) {
-    throw new Error(`Cannot use cwd ${path}: ${err.message}`);
+    throw new Error(`Cannot use cwd ${path}: ${safeErrorMessage(err)}`);
   }
 }
 
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 main().catch((err) => {
-  console.error(err);
+  printCliError(safeErrorMessage(err), false);
   process.exit(1);
 });

@@ -2,12 +2,15 @@ import { MCPClient } from "./client.js";
 import type { MCPServerConfig } from "../config.js";
 import type { ToolDef } from "../llm/deepseek.js";
 import type { ToolResult } from "../tools/registry.js";
+import { errorType, safeErrorMessage } from "../runtime/safe-text.js";
 
 export class MCPManager {
   private clients: MCPClient[] = [];
-  private connectionStatus: Array<{ name: string; ok: boolean; tools: number; error?: string }> = [];
+  private connectionStatus: Array<{ name: string; ok: boolean; tools: number; error?: string; error_type?: string }> = [];
 
   async connectAll(servers: Record<string, MCPServerConfig>): Promise<void> {
+    this.disconnectAll();
+    this.connectionStatus = [];
     for (const [name, cfg] of Object.entries(servers)) {
       const client = new MCPClient(cfg.command, cfg.args || [], cfg.env || {}, name);
       try {
@@ -16,8 +19,9 @@ export class MCPManager {
         this.connectionStatus.push({ name, ok: true, tools: client.getToolDefs().length });
         process.stderr.write(`[mcp] Connected: ${name} (${client.getToolDefs().length} tools)\n`);
       } catch (err: any) {
-        this.connectionStatus.push({ name, ok: false, tools: 0, error: err.message });
-        process.stderr.write(`[mcp] Failed to connect ${name}: ${err.message}\n`);
+        const message = safeErrorMessage(err);
+        this.connectionStatus.push({ name, ok: false, tools: 0, error: message, error_type: errorType(err) });
+        process.stderr.write(`[mcp] Failed to connect ${name}: ${message}\n`);
       }
     }
   }

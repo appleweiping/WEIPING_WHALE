@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type { Message } from "./llm/deepseek.js";
+import { compact, redactSecrets, safeErrorMessage } from "./runtime/safe-text.js";
 
 export interface SessionMemorySnapshot {
   sessionId: string;
@@ -22,7 +23,6 @@ export interface SessionMemoryResult {
 }
 
 const DEFAULT_AGENTMEMORY_URL = "http://localhost:3111";
-const DEFAULT_SHARED_MEMORY = "D:\\research\\Vipin's Knowledgebase\\memory";
 
 export async function saveSessionMemory(snapshot: SessionMemorySnapshot): Promise<SessionMemoryResult> {
   if (isMemoryDisabled()) return { agentmemory: false, skipped: true };
@@ -43,12 +43,11 @@ export async function saveSessionMemory(snapshot: SessionMemorySnapshot): Promis
       signal: AbortSignal.timeout(2_500),
     });
     if (response.ok) return { agentmemory: true };
-    const text = await response.text();
     const fallbackPath = writeMemoryOutbox(snapshot, content);
-    return { agentmemory: false, fallbackPath, error: `agentmemory HTTP ${response.status}: ${text.slice(0, 200)}` };
+    return { agentmemory: false, fallbackPath, error: `agentmemory HTTP ${response.status}` };
   } catch (err: any) {
     const fallbackPath = writeMemoryOutbox(snapshot, content);
-    return { agentmemory: false, fallbackPath, error: err?.message ?? String(err) };
+    return { agentmemory: false, fallbackPath, error: safeErrorMessage(err) };
   }
 }
 
@@ -61,16 +60,15 @@ export function formatSessionMemory(snapshot: SessionMemorySnapshot): string {
     `runtime: model=${snapshot.runtime.model ?? "unknown"}, thinking=${snapshot.runtime.thinking ?? "unknown"}, reasoning_effort=${snapshot.runtime.reasoning_effort ?? "unknown"}`,
     `messages: ${snapshot.messages.length}`,
   ];
-  if (snapshot.note) lines.push(`note: ${snapshot.note.slice(0, 1000)}`);
-  if (snapshot.error) lines.push(`error: ${snapshot.error.slice(0, 1000)}`);
+  if (snapshot.note) lines.push(`note: ${redactSecrets(snapshot.note).slice(0, 1000)}`);
+  if (snapshot.error) lines.push(`error: ${redactSecrets(snapshot.error).slice(0, 1000)}`);
   if (lastUser) lines.push(`last_user: ${lastUser}`);
   if (lastAssistant) lines.push(`last_assistant: ${lastAssistant}`);
   return lines.join("\n");
 }
 
 function writeMemoryOutbox(snapshot: SessionMemorySnapshot, content: string): string {
-  const root = sharedMemoryRoot();
-  const dir = root ? join(root, "sessions") : join(homedir(), ".deepseek-cli", "memory-outbox");
+  const dir = memoryOutboxDir();
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const path = join(dir, `deepseek-cli-${snapshot.status}-${stamp}.md`);
@@ -89,10 +87,21 @@ function writeMemoryOutbox(snapshot: SessionMemorySnapshot, content: string): st
   return path;
 }
 
-function sharedMemoryRoot(): string | null {
-  const configured = process.env.DEEPSEEK_SHARED_MEMORY_DIR;
-  if (configured) return configured;
-  return existsSync(DEFAULT_SHARED_MEMORY) ? DEFAULT_SHARED_MEMORY : null;
+export function memoryOutboxDir(): string {
+  return process.env.DEEPSEEK_MEMORY_OUTBOX_DIR || join(homedir(), ".deepseek-cli", "memory-outbox");
+}
+
+export function memoryDiagnostics() {
+  const enabled = !isMemoryDisabled();
+  const explicitUrl = Boolean(process.env.AGENTMEMORY_URL);
+  return {
+    enabled,
+    agentmemory_url_configured: explicitUrl,
+    agentmemory_endpoint: explicitUrl ? "explicit" : "default",
+    agentmemory_endpoint_configured: enabled,
+    outbox_dir: memoryOutboxDir(),
+    legacy_shared_memory_disabled: true,
+  };
 }
 
 function agentMemoryBaseUrl(): string {
@@ -117,13 +126,7 @@ function lastMessage(messages: Message[], role: Message["role"]): string | null 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== role || !message.content) continue;
-    return compact(message.content, 1200);
+    return compact(redactSecrets(message.content), 1200);
   }
   return null;
 }
-
-function compact(value: string, max: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
-}
-

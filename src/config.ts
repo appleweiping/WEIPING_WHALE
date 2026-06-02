@@ -3,6 +3,7 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import TOML from "@iarna/toml";
+import { endpointConfigured, endpointHost } from "./runtime/safe-text.js";
 
 export interface MCPServerConfig {
   command: string;
@@ -15,6 +16,8 @@ export interface Config {
   llm: {
     model: string;
     api_key: string;
+    api_key_env?: string;
+    api_key_source: string;
     base_url: string;
     temperature: number;
     max_tokens: number;
@@ -114,6 +117,8 @@ const DEFAULT_CONFIG: Config = {
   llm: {
     model: "deepseek-v4-flash",
     api_key: "",
+    api_key_env: "DEEPSEEK_API_KEY",
+    api_key_source: "missing",
     base_url: "https://api.deepseek.com",
     temperature: 0.3,
     max_tokens: 4096,
@@ -147,6 +152,7 @@ export function loadConfig(): Config {
       const parsed = TOML.parse(raw) as any;
       mergeConfig(config, parsed);
       config.config_path = p;
+      if (config.llm.api_key) config.llm.api_key_source = "config";
       break;
     }
   }
@@ -157,7 +163,10 @@ export function loadConfig(): Config {
 
   // Environment variable overrides
   const envKey = process.env.DEEPSEEK_API_KEY;
-  if (envKey) config.llm.api_key = envKey;
+  if (envKey) {
+    config.llm.api_key = envKey;
+    config.llm.api_key_source = "env:DEEPSEEK_API_KEY";
+  }
 
   const envModel = process.env.DEEPSEEK_MODEL;
   if (envModel) applyModelOverride(config, envModel);
@@ -175,8 +184,9 @@ export function loadConfig(): Config {
   if (envTimeout) config.llm.request_timeout_ms = normalizeRequestTimeout(envTimeout);
 
   // Resolve api_key_env indirection
-  if (!config.llm.api_key && (config.llm as any).api_key_env) {
-    config.llm.api_key = process.env[(config.llm as any).api_key_env] || "";
+  if (!config.llm.api_key && config.llm.api_key_env) {
+    config.llm.api_key = process.env[config.llm.api_key_env] || "";
+    config.llm.api_key_source = config.llm.api_key ? `env:${config.llm.api_key_env}` : "missing";
   }
 
   return config;
@@ -238,6 +248,29 @@ export function applyThinkingOverride(config: Config, input: string): Config {
     config.llm.reasoning_effort = normalizeReasoningEffort(input);
   }
   return config;
+}
+
+export interface ConfigCheck {
+  level: "ok" | "warn" | "error";
+  code: string;
+  message: string;
+}
+
+export function validateConfig(config: Config): ConfigCheck[] {
+  const checks: ConfigCheck[] = [];
+  const add = (level: ConfigCheck["level"], code: string, message: string) => checks.push({ level, code, message });
+
+  add(config.llm.api_key ? "ok" : "error", "auth.api_key", config.llm.api_key ? "DeepSeek API key is configured" : "Set DEEPSEEK_API_KEY or llm.api_key_env");
+  add(endpointConfigured(config.llm.base_url) && endpointHost(config.llm.base_url) !== "invalid-url" ? "ok" : "error", "llm.base_url", endpointHost(config.llm.base_url) === "invalid-url" ? "llm.base_url is not a valid URL" : "LLM endpoint is configured");
+  add(config.llm.max_tokens > 0 ? "ok" : "error", "llm.max_tokens", config.llm.max_tokens > 0 ? "max_tokens is positive" : "max_tokens must be positive");
+  add(config.llm.request_timeout_ms >= 1000 ? "ok" : "error", "llm.request_timeout_ms", config.llm.request_timeout_ms >= 1000 ? "request timeout is usable" : "request_timeout_ms must be >= 1000");
+  add(config.agent.max_iterations >= 1 ? (config.agent.max_iterations <= 200 ? "ok" : "warn") : "error", "agent.max_iterations", config.agent.max_iterations < 1 ? "max_iterations must be at least 1" : config.agent.max_iterations <= 200 ? "max_iterations is bounded" : "max_iterations above 200 can cause long runaway sessions");
+
+  if (config.config_path && config.config_path.includes("\\_archive\\")) {
+    add("warn", "config.packaged_archive", "Using the packaged fallback config from an archive checkout; install a user config for daily use");
+  }
+
+  return checks;
 }
 
 function mergeConfig(target: any, source: any) {

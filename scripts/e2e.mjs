@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,8 +8,34 @@ const node = process.execPath;
 const cli = join(process.cwd(), "dist", "index.js");
 const homeDir = mkdtempSync(join(tmpdir(), "deepseek-cli-home-"));
 const configDir = mkdtempSync(join(tmpdir(), "deepseek-cli-config-"));
+const outboxDir = mkdtempSync(join(tmpdir(), "deepseek-cli-memory-outbox-"));
 const configPath = join(configDir, "config.toml");
+const mcpConfigPath = join(configDir, "mcp-config.toml");
+const mcpEnvReport = join(configDir, "mcp-env-report.json");
 writeFileSync(configPath, "[llm]\nmodel = \"deepseek-v4-flash\"\napi_key_env = \"DEEPSEEK_API_KEY\"\nbase_url = \"https://api.deepseek.com\"\n\n[agent]\nworkspace = \".\"\nmax_iterations = 3\n");
+writeFileSync(
+  mcpConfigPath,
+  [
+    "[llm]",
+    'model = "deepseek-v4-flash"',
+    'api_key_env = "DEEPSEEK_API_KEY"',
+    'base_url = "https://api.deepseek.com"',
+    "",
+    "[agent]",
+    'workspace = "."',
+    "max_iterations = 3",
+    "",
+    "[mcp_servers.fake]",
+    'command = "node"',
+    `args = ["${tomlPath(join(process.cwd(), "scripts", "fake-mcp-server.mjs"))}"]`,
+    "",
+    "[mcp_servers.fake.env]",
+    `MCP_ENV_REPORT = "${tomlPath(mcpEnvReport)}"`,
+    'EXPLICIT_ALLOWED = "yes"',
+    "",
+  ].join("\n"),
+  "utf-8",
+);
 
 function run(args, options = {}) {
   return spawnSync(node, [cli, ...args], {
@@ -24,7 +50,7 @@ function run(args, options = {}) {
       DEEPSEEK_WRITE_MODE: "preview",
       DEEPSEEK_SANDBOX_MODE: "workspace-write",
       AGENTMEMORY_URL: "http://127.0.0.1:9",
-      DEEPSEEK_SHARED_MEMORY_DIR: homeDir,
+      DEEPSEEK_MEMORY_OUTBOX_DIR: outboxDir,
       HOME: homeDir,
       USERPROFILE: homeDir,
       ...options.env,
@@ -41,15 +67,22 @@ function json(args, options) {
 try {
   const version = run(["--version"]);
   assert.equal(version.status, 0, version.error?.message || version.stderr || version.stdout);
-  assert.match(version.stdout, /0\.1\.0/);
+  assert.match(version.stdout, /0\.2\.0/);
 
   const doctor = json(["--doctor"]);
   assert.equal(doctor.ok, true);
+  assert.equal(doctor.runtime.model, "deepseek-v4-flash");
+  assert.equal(doctor.endpoint.configured, true);
+  assert.equal(doctor.endpoint.host, "api.deepseek.com");
+  assert.equal(doctor.base_url, undefined);
   assert.equal(doctor.auth.api_key, "configured");
   assert.equal(doctor.safety.write_mode, "preview");
   assert.equal(doctor.safety.approval_mode, "on-request");
   assert.equal(doctor.safety.sandbox_mode, "workspace-write");
+  assert.equal(doctor.memory.legacy_shared_memory_disabled, true);
+  assert.equal(doctor.paths.memory_outbox_dir, outboxDir);
   assert.deepEqual(doctor.mcp_diagnostics, []);
+  assert.ok(doctor.checks.every((check) => ["ok", "warn"].includes(check.level)));
 
   const models = json(["--models"]);
   assert.ok(models.models.some((model) => model.name === "pro"));
@@ -78,6 +111,28 @@ try {
     rapid_scroll: true,
     menu_scroll: true,
   });
+
+  const runtimeSelfTest = run(["--self-test-runtime"]);
+  assert.equal(runtimeSelfTest.status, 0, runtimeSelfTest.stderr || runtimeSelfTest.stdout || runtimeSelfTest.error?.message);
+  const runtimeSelfTestJson = JSON.parse(runtimeSelfTest.stdout.match(/\{.*\}/s)?.[0] ?? "{}");
+  assert.equal(runtimeSelfTestJson.ok, true);
+  assert.equal(runtimeSelfTestJson.patch, true);
+  assert.equal(runtimeSelfTestJson.monitor_safety, true);
+  assert.equal(runtimeSelfTestJson.memory_outbox, true);
+
+  const mcpDoctor = json(["--doctor"], {
+    env: {
+      DEEPSEEK_CONFIG: mcpConfigPath,
+      AGENTMEMORY_SECRET: "agentmemory-secret-should-not-leak",
+    },
+  });
+  assert.equal(mcpDoctor.ok, true);
+  assert.equal(mcpDoctor.mcp_diagnostics[0].ok, true);
+  assert.equal(mcpDoctor.mcp_diagnostics[0].tools, 1);
+  const mcpEnv = JSON.parse(readFileSync(mcpEnvReport, "utf8"));
+  assert.equal(mcpEnv.saw_deepseek_api_key, false);
+  assert.equal(mcpEnv.saw_agentmemory_secret, false);
+  assert.equal(mcpEnv.saw_explicit_allowed, true);
 
   const workspaceDir = mkdtempSync(join(tmpdir(), "deepseek-cli-workspace-"));
   try {
@@ -131,9 +186,21 @@ try {
   const resumed = run(["--resume", "e2e-session"], { input: "/session\n/exit\n" });
   assert.equal(resumed.status, 0, resumed.stderr || resumed.stdout || resumed.error?.message);
   assert.match(resumed.stdout, /session: e2e-session/);
+
+  const sessionDir = join(homeDir, ".deepseek-cli", "sessions");
+  mkdirSync(sessionDir, { recursive: true });
+  writeFileSync(join(sessionDir, "broken.json"), "{not-json", "utf8");
+  const sessionsWithCorruptFile = run([], { input: "/sessions 20\n/exit\n" });
+  assert.equal(sessionsWithCorruptFile.status, 0, sessionsWithCorruptFile.stderr || sessionsWithCorruptFile.stdout || sessionsWithCorruptFile.error?.message);
+  assert.match(sessionsWithCorruptFile.stdout, /e2e-session/);
 } finally {
   rmSync(homeDir, { recursive: true, force: true });
   rmSync(configDir, { recursive: true, force: true });
+  rmSync(outboxDir, { recursive: true, force: true });
 }
 
 console.log("e2e ok");
+
+function tomlPath(value) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}

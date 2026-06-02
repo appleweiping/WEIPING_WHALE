@@ -1,3 +1,5 @@
+import { compact, errorType, safeErrorMessage } from "../runtime/safe-text.js";
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
@@ -110,7 +112,7 @@ export class DeepSeekClient {
 
     const text = await res.text();
     if (!res.ok) {
-      throw new Error(`DeepSeek API error ${res.status}: ${text.slice(0, 500)}`);
+      throw this.formatHttpError(res.status, text);
     }
 
     const data = JSON.parse(text);
@@ -140,7 +142,7 @@ export class DeepSeekClient {
 
     this.applyThinkingParams(body);
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    const res = await this.fetchWithRetry(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -151,7 +153,7 @@ export class DeepSeekClient {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`DeepSeek API error ${res.status}: ${text.slice(0, 500)}`);
+      throw this.formatHttpError(res.status, text);
     }
 
     const reader = res.body?.getReader();
@@ -193,6 +195,7 @@ export class DeepSeekClient {
           signal: AbortSignal.timeout(this.requestTimeoutMs),
         });
         if (res.status === 429 || res.status >= 500) {
+          if (i === retries - 1) return res;
           await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
           continue;
         }
@@ -202,16 +205,27 @@ export class DeepSeekClient {
         await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
       }
     }
-    throw new Error("Max retries exceeded");
+    throw new Error(`DeepSeek API retry attempts exhausted after ${retries} attempts`);
   }
 
   private formatNetworkError(err: unknown): string {
-    const message = err instanceof Error ? err.message : String(err);
     const name = err instanceof Error ? err.name : "NetworkError";
+    const message = safeErrorMessage(err);
     if (name === "TimeoutError" || message.toLowerCase().includes("timeout")) {
       return `DeepSeek API request timed out after ${this.requestTimeoutMs}ms. The session was saved; use /retry after the network recovers.`;
     }
     return `DeepSeek API network error: ${message}. The session was saved; use /retry after the network recovers.`;
+  }
+
+  private formatHttpError(status: number, bodyText: string): Error {
+    const parsed = parseRemoteError(bodyText);
+    const retryHint = status === 429
+      ? " Reduce concurrency or retry later."
+      : status >= 500
+        ? " The provider may be degraded; retry later."
+        : "";
+    const details = process.env.DEEPSEEK_DEBUG_ERRORS === "1" && parsed.message ? ` remote_message=${parsed.message}` : "";
+    return new Error(`DeepSeek API error HTTP_${status} remote_type=${parsed.type}${details}.${retryHint}`.trim());
   }
 
   private applyThinkingParams(body: Record<string, any>) {
@@ -234,5 +248,18 @@ export class DeepSeekClient {
       }
       return serialized;
     });
+  }
+}
+
+function parseRemoteError(text: string): { type: string; message?: string } {
+  if (!text.trim()) return { type: "empty_response" };
+  try {
+    const data = JSON.parse(text) as any;
+    const remote = data?.error ?? data;
+    const type = String(remote?.type ?? remote?.code ?? remote?.status ?? "provider_error");
+    const message = typeof remote?.message === "string" ? compact(safeErrorMessage(remote.message), 220) : undefined;
+    return { type: compact(type, 80), message };
+  } catch (err) {
+    return { type: errorType(err) === "SyntaxError" ? "non_json_error_body" : "unparseable_error_body" };
   }
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
 import { assertWritablePath } from "./sandbox.js";
+import { safeErrorMessage } from "../runtime/safe-text.js";
 
 export type PatchKind = "write" | "edit";
 
@@ -56,7 +57,7 @@ export function applyFilePatch(id: string): { ok: boolean; message: string; patc
   try {
     assertWritablePath(patch.path);
   } catch (err: any) {
-    return { ok: false, message: err.message, patch };
+    return { ok: false, message: safeErrorMessage(err), patch };
   }
   const current = existsSync(patch.path) ? readFileSync(patch.path, "utf-8") : "";
   if (current !== patch.before) {

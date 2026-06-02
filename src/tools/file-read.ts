@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { registerTool } from "./registry.js";
+import { safeErrorMessage } from "../runtime/safe-text.js";
 
 registerTool(
   "read_file",
@@ -30,7 +31,7 @@ registerTool(
           : "";
       return { output: numbered + info };
     } catch (err: any) {
-      return { output: `Error reading file: ${err.message}`, error: true };
+      return { output: `Error reading file: ${safeErrorMessage(err)}`, error: true };
     }
   }
 );

@@ -31,11 +31,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/appleweiping/deepseek-cli.git"
+    "url": "git+https://github.com/appleweiping/DEEPSEEK_CLI.git"
   },
-  "homepage": "https://github.com/appleweiping/deepseek-cli#readme",
+  "homepage": "https://github.com/appleweiping/DEEPSEEK_CLI#readme",
   "bugs": {
-    "url": "https://github.com/appleweiping/deepseek-cli/issues"
+    "url": "https://github.com/appleweiping/DEEPSEEK_CLI/issues"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -43,6 +43,7 @@
   "files": [
     "dist/",
     "config.toml",
+    "docs/releases/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

@@ -38,4 +38,3 @@ This release turns DeepSeek CLI from a useful local prototype into a more honest
 ## 0.1.0
 
 Initial public terminal-agent baseline.
-

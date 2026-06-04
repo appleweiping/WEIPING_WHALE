@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/appleweiping/deepseek-cli/master/assets/banner.png" alt="DeepSeek CLI" width="720" />
+  <img src="https://raw.githubusercontent.com/appleweiping/DEEPSEEK_CLI/master/assets/banner.png" alt="DEEPSEEK_CLI" width="720" />
 </p>
 
 <p align="center">
@@ -8,10 +8,10 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/deepseek-cli-agent"><img src="https://img.shields.io/npm/v/deepseek-cli-agent?color=CB3837&label=npm&style=for-the-badge&logo=npm" alt="npm version" /></a>
-  <a href="https://github.com/appleweiping/deepseek-cli/blob/master/LICENSE"><img src="https://img.shields.io/github/license/appleweiping/deepseek-cli?color=blue&style=for-the-badge" alt="License" /></a>
+  <a href="https://github.com/appleweiping/DEEPSEEK_CLI/blob/master/LICENSE"><img src="https://img.shields.io/github/license/appleweiping/DEEPSEEK_CLI?color=blue&style=for-the-badge" alt="License" /></a>
 </p>
 
-DeepSeek CLI is a focused coding-agent CLI for people who want a small terminal tool rather than a web app. It can inspect files, search with glob/grep, run shell commands behind approval gates, preview file edits as patches, connect MCP servers, resume saved sessions, and write compact session summaries to agentmemory when available.
+DEEPSEEK_CLI is a focused coding-agent CLI for people who want a small terminal tool rather than a web app. It can inspect files, search with glob/grep, run shell commands behind approval gates, preview file edits as patches, connect MCP servers, resume saved sessions, and write compact session summaries to agentmemory when available.
 
 The project goal is honesty over spectacle: `deepseek --doctor --json` reports exactly what is configured, what is missing, and where local state will be written without exposing API keys or raw provider URLs.
 
@@ -24,12 +24,16 @@ npm install -g deepseek-cli-agent
 Or run from source:
 
 ```bash
-git clone https://github.com/appleweiping/deepseek-cli.git
-cd deepseek-cli
+git clone https://github.com/appleweiping/DEEPSEEK_CLI.git
+cd DEEPSEEK_CLI
 npm ci
 npm run build
 node dist/index.js --doctor
 ```
+
+The 2026-06-04 upgrade pass ran Universal Upgrade Forge for 108 iterations and
+materialized the public project identity as `DEEPSEEK_CLI`. See
+[`docs/releases/2026-06-04-uupf-deepseek-cli-upgrade.md`](docs/releases/2026-06-04-uupf-deepseek-cli-upgrade.md).
 
 ## First Run
 
@@ -160,11 +164,11 @@ Run `/mcp status`, `/mcp reconnect`, or `deepseek --doctor --json` to inspect co
 
 ## Relationship To The Other Vipin Tools
 
-`vipin-council` is the multi-model debate and orchestration layer. It benefits from richer provider health and cross-model review.
+`WEIPING_COUNCIL` is the multi-model debate and orchestration layer. It benefits from richer provider health and cross-model review.
 
 `deepseek-cli` is the lightweight terminal worker. It is best for fast local text/code tasks, patch previews, skill-guided maintenance, and inexpensive DeepSeek runs.
 
-`vipin-lab` is the experiment/workbench surface. DeepSeek CLI can help maintain it, but the lab remains the place where reproducible experiment workflows should be exposed.
+`WEIPING_LAB` is the experiment/workbench surface. DeepSeek CLI can help maintain it, but the lab remains the place where reproducible experiment workflows should be exposed.
 
 The three projects should share operating discipline, not implementation bulk. This CLI intentionally keeps its core small and transparent.
 

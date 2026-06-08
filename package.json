@@ -16,7 +16,7 @@
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
     "scan:release": "node scripts/release-scan.mjs",
     "smoke:package": "node scripts/package-smoke.mjs",
-    "test": "npm run build && node scripts/e2e.mjs && node --import tsx scripts/e2e-snapshots.mjs && node --import tsx scripts/e2e-sessions.mjs && node --import tsx scripts/e2e-cost.mjs && node --import tsx scripts/e2e-compaction.mjs && node --import tsx scripts/e2e-prompt.mjs && node --import tsx scripts/e2e-router.mjs && node --import tsx scripts/e2e-skills.mjs && node --import tsx scripts/e2e-subagent.mjs && npm run smoke:package && npm run scan:release"
+    "test": "npm run build && node scripts/e2e.mjs && node --import tsx scripts/e2e-snapshots.mjs && node --import tsx scripts/e2e-sessions.mjs && node --import tsx scripts/e2e-cost.mjs && node --import tsx scripts/e2e-compaction.mjs && node --import tsx scripts/e2e-prompt.mjs && node --import tsx scripts/e2e-router.mjs && node --import tsx scripts/e2e-skills.mjs && node --import tsx scripts/e2e-subagent.mjs && node --import tsx scripts/e2e-vision.mjs && node --import tsx scripts/e2e-lsp.mjs && node --import tsx scripts/e2e-server.mjs && npm run smoke:package && npm run scan:release"
   },
   "keywords": [
     "deepseek",
@@ -66,6 +66,7 @@
     "@types/node": "^22.0.0",
     "tsdown": "^0.9.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "typescript-language-server": "^4.4.1"
   }
 }

@@ -47,6 +47,10 @@ import "./tools/subagent.js";
 import { SnapshotManager } from "./snapshot/manager.js";
 import { setActiveSnapshotManager } from "./tools/snapshot-tool.js";
 import { SubAgentManager, setActiveSubAgentManager } from "./tools/subagent.js";
+import { LspManager } from "./lsp/manager.js";
+import { setActiveLspManager } from "./lsp/active.js";
+import { diagnosticsSuffix } from "./lsp/active.js";
+import { startRuntimeApi, type RuntimeApiHandle } from "./server/runtime-api.js";
 import { CostTracker } from "./cost.js";
 
 // ── Execution mode ────────────────────────────────────────────────────────────
@@ -209,6 +213,16 @@ async function main() {
     depth: 0,
   });
   setActiveSubAgentManager(subAgentManager);
+
+  // LSP post-edit diagnostics (TypeScript + Python). Best-effort; missing servers
+  // are silently skipped. Off in JSON/one-shot to avoid spawning servers needlessly.
+  const lspManager = new LspManager(process.cwd(), {
+    enabled: config.lsp?.enabled ?? true,
+    includeWarnings: config.lsp?.include_warnings,
+    pollAfterEditMs: config.lsp?.poll_after_edit_ms,
+    maxPerFile: config.lsp?.max_per_file,
+  });
+  setActiveLspManager(lspManager);
   const stats = () => ({
     toolCount: getToolDefs().length + mcpManager.getToolDefs().length,
     mcpServerCount: mcpManager.getServerCount(),
@@ -236,7 +250,9 @@ async function main() {
   if (task) {
     try {
       snapshotManager.beforeTurn();
-      const reply = await agent.run(task, events);
+      const taskImages = getPendingImages();
+      clearPendingImages();
+      const reply = await agent.run(task, events, taskImages);
       snapshotManager.afterTurn();
       await persistSnapshot("completed", "single task completed");
       if (json) {
@@ -249,15 +265,51 @@ async function main() {
       await persistSnapshot("error", "single task failed; resume this session and retry after the network recovers", message);
       if (json) console.error(JSON.stringify({ ok: false, session: sessionId, error: { message } }, null, 2));
       else printCliError(message, false);
+      lspManager.dispose();
       mcpManager.disconnectAll();
       process.exit(1);
     }
+    lspManager.dispose();
     mcpManager.disconnectAll();
     process.exit(0);
   }
 
   banner(agent.getRuntime(), process.cwd(), stats());
   printInfo(formatSessionInfo(sessionId));
+
+  // Optional local HTTP/SSE control surface (off unless --serve). Localhost-only
+  // by default; requires a bearer token (auto-generated and printed once).
+  let apiHandle: RuntimeApiHandle | undefined;
+  if (args.includes("--serve")) {
+    let serveChain: Promise<void> = Promise.resolve();
+    const runTurn = (message: string): Promise<string> => {
+      // Serialize turns through the single agent so HTTP requests can't interleave.
+      const result = serveChain.then(async () => {
+        snapshotManager.beforeTurn();
+        const reply = await agent.run(message, events);
+        snapshotManager.afterTurn();
+        await persistSnapshot("completed", "api turn completed");
+        return reply;
+      });
+      serveChain = result.then(() => undefined, () => undefined);
+      return result;
+    };
+    try {
+      const host = readFlag(args, "--host");
+      const portStr = readFlag(args, "--port");
+      apiHandle = await startRuntimeApi(
+        { agent, costTracker, runTurn },
+        { host, port: portStr ? Number(portStr) : undefined, token: process.env.WEIPING_WHALE_API_TOKEN },
+      );
+      printInfo(`HTTP API listening on ${apiHandle.url}`);
+      printInfo(`API token: ${apiHandle.token}  (send as: Authorization: Bearer <token>)`);
+      if (host && host !== "127.0.0.1" && host !== "localhost") {
+        printError(`WARNING: API bound to ${host} (non-localhost). Anyone who can reach this host + token can drive the agent.`);
+      }
+    } catch (err: any) {
+      printError(`Failed to start HTTP API: ${safeErrorMessage(err)}`);
+    }
+  }
 
   const commandContext: CommandContext = {
     agent,
@@ -289,7 +341,9 @@ async function main() {
 
     try {
       snapshotManager.beforeTurn();
-      const reply = await agent.run(line, events);
+      const turnImages = getPendingImages();
+      clearPendingImages();
+      const reply = await agent.run(line, events, turnImages);
       snapshotManager.afterTurn();
       await persistSnapshot("completed", "assistant reply completed");
       printAssistant(reply);
@@ -317,6 +371,8 @@ async function main() {
     try {
       await persistSnapshot(status, status === "interrupted" ? "SIGINT received" : "reader closed");
     } catch {}
+    if (apiHandle) await apiHandle.close().catch(() => {});
+    lspManager.dispose();
     mcpManager.disconnectAll();
     process.exit(0);
   }
@@ -963,6 +1019,10 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         else {
           const result = applyFilePatch(arg);
           console.log(result.message);
+          if (result.ok && result.patch) {
+            const suffix = await diagnosticsSuffix(result.patch.path);
+            if (suffix.trim()) console.log(suffix.trim());
+          }
         }
         return true;
       }
@@ -1408,7 +1468,7 @@ function readFlag(args: string[], name: string): string | undefined {
 }
 
 function readPositionalTask(args: string[]): string | null {
-  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace", "--session", "--resume"]);
+  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace", "--session", "--resume", "--port", "--host"]);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (valueFlags.has(arg)) {

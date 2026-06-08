@@ -1,8 +1,12 @@
 import { compact, errorType, safeErrorMessage } from "../runtime/safe-text.js";
 
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | ContentBlock[] | null;
   reasoning_content?: string | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;

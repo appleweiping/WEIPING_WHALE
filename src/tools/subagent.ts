@@ -90,18 +90,21 @@ export class SubAgentManager {
 
   /** Evict the oldest finished records once we exceed the retention cap. */
   private evictOldRecords(): void {
-    if (this.agents.size < MAX_RECORDS) return;
+    // Keep at least enough headroom for all concurrently-running agents.
+    const cap = Math.max(MAX_RECORDS, this.deps.maxAgents + 1);
+    if (this.agents.size < cap) return;
     const finished = [...this.agents.values()]
       .filter((r) => r.status !== "running")
       .sort((a, b) => (a.finishedAt ?? a.startedAt) - (b.finishedAt ?? b.startedAt));
     for (const r of finished) {
-      if (this.agents.size < MAX_RECORDS) break;
+      if (this.agents.size < cap) break;
       this.agents.delete(r.id);
     }
   }
 
   private async runChild(record: SubAgentRecord, objective: string): Promise<void> {
     const timeoutMs = this.deps.childTimeoutMs ?? CHILD_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const child = this.deps.makeAgent(this.deps.config, this.deps.mcpManager);
       // Children route at low effort and never recurse past the depth cap.
@@ -113,12 +116,14 @@ export class SubAgentManager {
       const reply = await Promise.race([
         child.run(prompt, {
           onToolEnd: () => {
-            record.steps += 1;
+            // Only count steps while still running; a timed-out child whose record
+            // is already settled must not keep mutating it.
+            if (record.status === "running") record.steps += 1;
           },
         }),
-        new Promise<string>((_, reject) =>
-          setTimeout(() => reject(new Error(`sub-agent timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs),
-        ),
+        new Promise<string>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`sub-agent timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+        }),
       ]);
       record.status = "completed";
       record.result = reply.slice(0, MAX_RESULT_CHARS);
@@ -126,6 +131,7 @@ export class SubAgentManager {
       record.status = "failed";
       record.error = String(err?.message ?? err).slice(0, 2000);
     } finally {
+      if (timer) clearTimeout(timer); // don't leak the timer when the child wins the race
       record.finishedAt = Date.now();
       this.running = Math.max(0, this.running - 1);
     }

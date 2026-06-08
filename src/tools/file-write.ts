@@ -4,6 +4,7 @@ import { registerTool } from "./registry.js";
 import { createFilePatch, formatPatchCreated, getWriteMode } from "../safety/patches.js";
 import { assertWritablePath } from "../safety/sandbox.js";
 import { safeErrorMessage } from "../runtime/safe-text.js";
+import { diagnosticsSuffix } from "../lsp/active.js";
 
 registerTool(
   "write_file",
@@ -26,7 +27,7 @@ registerTool(
       }
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, content, "utf-8");
-      return { output: `Written ${content.length} chars to ${abs}` };
+      return { output: `Written ${content.length} chars to ${abs}${await diagnosticsSuffix(abs)}` };
     } catch (err: any) {
       return { output: `Error: ${safeErrorMessage(err)}`, error: true };
     }
@@ -66,7 +67,7 @@ registerTool(
         return { output: formatPatchCreated(patch) };
       }
       writeFileSync(abs, updated, "utf-8");
-      return { output: `Edited ${abs}` };
+      return { output: `Edited ${abs}${await diagnosticsSuffix(abs)}` };
     } catch (err: any) {
       return { output: `Error: ${safeErrorMessage(err)}`, error: true };
     }

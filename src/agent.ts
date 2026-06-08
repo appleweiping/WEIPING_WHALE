@@ -1,4 +1,4 @@
-import { DeepSeekClient, type Message, type ToolDef, type ToolCall, type Usage } from "./llm/deepseek.js";
+import { DeepSeekClient, type Message, type ToolDef, type ToolCall, type Usage, type ContentBlock } from "./llm/deepseek.js";
 import {
   planCompaction,
   shouldCompact,
@@ -97,7 +97,11 @@ export class Agent {
   getLastUserMessage(): string | null {
     for (let index = this.messages.length - 1; index >= 0; index--) {
       const message = this.messages[index];
-      if (message.role === "user" && message.content) return message.content;
+      if (message.role === "user" && message.content) {
+        return typeof message.content === "string"
+          ? message.content
+          : message.content.map((b) => (b.type === "text" ? b.text : "[image]")).join(" ");
+      }
     }
     return null;
   }
@@ -237,8 +241,17 @@ export class Agent {
     return this.lastRoute;
   }
 
-  async run(userMessage: string, events: AgentEvents = {}): Promise<string> {
-    this.messages.push({ role: "user", content: userMessage });
+  async run(userMessage: string, events: AgentEvents = {}, images: ImageAttachment[] = []): Promise<string> {
+    // Attach images as OpenAI-compatible content blocks when present.
+    if (images.length > 0) {
+      const blocks: ContentBlock[] = [{ type: "text", text: userMessage }];
+      for (const img of images) {
+        blocks.push({ type: "image_url", image_url: { url: `data:${img.mimeType};base64,${img.base64}` } });
+      }
+      this.messages.push({ role: "user", content: blocks });
+    } else {
+      this.messages.push({ role: "user", content: userMessage });
+    }
     if (this.autoRoute) {
       const decision = route({ lastUserMessage: userMessage });
       this.setModel(decision.model);
@@ -396,4 +409,10 @@ export interface AgentEvents {
   onToolEnd?: (name: string, elapsedMs: number, error: boolean) => void;
   onUsage?: (model: string, usage: Usage) => void;
   onRoute?: (decision: string) => void;
+}
+
+export interface ImageAttachment {
+  path: string;
+  base64: string;
+  mimeType: string;
 }

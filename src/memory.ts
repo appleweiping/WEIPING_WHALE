@@ -127,7 +127,11 @@ function lastMessage(messages: Message[], role: Message["role"]): string | null 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== role || !message.content) continue;
-    return compact(redactSecrets(message.content), 1200);
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((b) => (b.type === "text" ? b.text : "[image]")).join(" ");
+    return compact(redactSecrets(text), 1200);
   }
   return null;
 }

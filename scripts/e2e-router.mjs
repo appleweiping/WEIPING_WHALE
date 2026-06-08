@@ -49,5 +49,10 @@ assert.equal(route({ lastUserMessage: "give me information about X" }).effort, "
 // But standalone words still match.
 assert.equal(route({ lastUserMessage: "please search the codebase" }).effort, "low", "standalone 'search' -> low");
 assert.equal(route({ lastUserMessage: "I hit an error here" }).effort, "max", "standalone 'error' -> max");
+// Inflected forms still match (prefix-aware), without false positives.
+assert.equal(route({ lastUserMessage: "I keep getting errors" }).effort, "max", "'errors' -> max");
+assert.equal(route({ lastUserMessage: "it crashed again" }).effort, "max", "'crashed' -> max");
+assert.equal(route({ lastUserMessage: "debugging the loop" }).effort, "max", "'debugging' -> max");
+assert.equal(route({ lastUserMessage: "research the topic" }).effort, "high", "'research' still NOT 'search'");
 
 console.log("router e2e ok");

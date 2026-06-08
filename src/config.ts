@@ -39,6 +39,12 @@ export interface Config {
     max_agents?: number;
     max_depth?: number;
   };
+  lsp?: {
+    enabled?: boolean;
+    include_warnings?: boolean;
+    poll_after_edit_ms?: number;
+    max_per_file?: number;
+  };
   mcp_servers: Record<string, MCPServerConfig>;
 }
 
@@ -147,6 +153,12 @@ const DEFAULT_CONFIG: Config = {
   subagents: {
     max_agents: 4,
     max_depth: 2,
+  },
+  lsp: {
+    enabled: true,
+    include_warnings: false,
+    poll_after_edit_ms: 2500,
+    max_per_file: 20,
   },
   mcp_servers: {},
 };

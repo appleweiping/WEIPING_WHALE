@@ -75,8 +75,10 @@ export function route(ctx: RouteContext): RouteDecision {
 function matchKeyword(text: string, keywords: string[]): string | undefined {
   for (const k of keywords) {
     if (isLatin(k)) {
-      // Build a boundary-aware matcher: \b works for ASCII word chars.
-      const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(k)}(?:$|[^a-z0-9])`, "i");
+      // Leading word boundary, but allow trailing inflections so "error" matches
+      // "errors", "debug" matches "debugging", etc. — without firing on a keyword
+      // embedded mid-word ("search" must not match "research").
+      const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(k)}[a-z]*(?:$|[^a-z0-9])`, "i");
       if (re.test(text)) return k;
     } else if (text.includes(k)) {
       return k;

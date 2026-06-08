@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
-import { homedir } from "os";
 import type { Message } from "./llm/deepseek.js";
 import { safeErrorMessage } from "./runtime/safe-text.js";
+import { sessionsDir } from "./runtime/paths.js";
 
 export interface SessionState {
   id: string;
@@ -66,7 +66,7 @@ export function formatSessionInfo(id: string): string {
 }
 
 export function sessionDir(): string {
-  return resolve(homedir(), ".deepseek-cli", "sessions");
+  return sessionsDir();
 }
 
 function sanitizeSessionId(id: string): string {

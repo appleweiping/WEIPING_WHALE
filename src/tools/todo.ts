@@ -1,12 +1,13 @@
 /**
- * todo.ts — Persistent todo list for DeepSeek CLI
+ * todo.ts — Persistent todo list for WEIPING_WHALE
  *
- * Stores tasks in ~/.deepseek-cli/todos.json
+ * Stores tasks in <state-root>/todos.json (see runtime/paths.ts)
  * Commands: /todo add <text> | /todo done <id> | /todo list | /todo clear | /todo remove <id>
  */
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { stateRoot } from "../runtime/paths.js";
 
 export interface TodoItem {
   id: string;
@@ -17,7 +18,7 @@ export interface TodoItem {
   priority: "high" | "normal" | "low";
 }
 
-const TODO_DIR = join(homedir(), ".deepseek-cli");
+const TODO_DIR = stateRoot();
 const TODO_FILE = join(TODO_DIR, "todos.json");
 
 function ensureDir() {

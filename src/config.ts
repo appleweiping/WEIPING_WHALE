@@ -139,9 +139,13 @@ export function loadConfig(): Config {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
   const configPaths = [
+    process.env.WEIPING_WHALE_CONFIG,
     process.env.DEEPSEEK_CONFIG,
+    join(process.cwd(), "weiping-whale.toml"),
+    join(process.cwd(), ".weiping-whale.toml"),
     join(process.cwd(), "deepseek-cli.toml"),
     join(process.cwd(), ".deepseek-cli.toml"),
+    join(homedir(), ".weiping-whale", "config.toml"),
     join(homedir(), ".deepseek-cli", "config.toml"),
     join(packageRoot, "config.toml"),
   ];

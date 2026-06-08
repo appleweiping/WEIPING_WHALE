@@ -1,10 +1,12 @@
 {
-  "name": "deepseek-cli-agent",
-  "version": "0.2.0",
-  "description": "Terminal-native DeepSeek coding agent with honest diagnostics, safe patch previews, MCP, sessions, and agentmemory outbox support",
+  "name": "weiping-whale",
+  "version": "0.3.0",
+  "description": "WEIPING_WHALE — terminal-native DeepSeek coding agent: side-git snapshots, session fork/backtrack, auto model routing, skills, sub-agents, LSP diagnostics, live cost tracking, MCP, and an optional local HTTP/SSE API. Based on CodeWhale (MIT).",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
+    "weiping-whale": "./dist/index.js",
+    "wwhale": "./dist/index.js",
     "deepseek": "./dist/index.js"
   },
   "scripts": {
@@ -25,17 +27,21 @@
     "terminal",
     "ai",
     "tool-use",
-    "agentmemory"
+    "agentmemory",
+    "weiping-whale",
+    "lsp",
+    "snapshots",
+    "codewhale"
   ],
   "author": "appleweiping",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/appleweiping/DEEPSEEK_CLI.git"
+    "url": "git+https://github.com/appleweiping/WEIPING_WHALE.git"
   },
-  "homepage": "https://github.com/appleweiping/DEEPSEEK_CLI#readme",
+  "homepage": "https://github.com/appleweiping/WEIPING_WHALE#readme",
   "bugs": {
-    "url": "https://github.com/appleweiping/DEEPSEEK_CLI/issues"
+    "url": "https://github.com/appleweiping/WEIPING_WHALE/issues"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -43,19 +49,23 @@
   "files": [
     "dist/",
     "config.toml",
+    "prompts/",
     "docs/releases/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "fast-glob": "^3.3.3",
-    "@iarna/toml": "^2.2.5"
+    "js-yaml": "^4.2.0",
+    "vscode-jsonrpc": "^8.2.1"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
     "tsdown": "^0.9.0",
     "tsx": "^4.19.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0"
   }
 }

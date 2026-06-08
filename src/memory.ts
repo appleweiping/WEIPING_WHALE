@@ -3,6 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Message } from "./llm/deepseek.js";
 import { compact, redactSecrets, safeErrorMessage } from "./runtime/safe-text.js";
+import { memoryOutboxDir as resolveMemoryOutboxDir } from "./runtime/paths.js";
 
 export interface SessionMemorySnapshot {
   sessionId: string;
@@ -88,7 +89,7 @@ function writeMemoryOutbox(snapshot: SessionMemorySnapshot, content: string): st
 }
 
 export function memoryOutboxDir(): string {
-  return process.env.DEEPSEEK_MEMORY_OUTBOX_DIR || join(homedir(), ".deepseek-cli", "memory-outbox");
+  return resolveMemoryOutboxDir();
 }
 
 export function memoryDiagnostics() {

@@ -39,4 +39,15 @@ assert.equal(route({ lastUserMessage: "   " }).effort, "high", "blank -> high");
 // Every decision carries a reason string.
 assert.ok(route({ lastUserMessage: "debug" }).reason.length > 0, "decision has reason");
 
+// Word-boundary matching: substrings of larger words must NOT trigger.
+assert.equal(route({ lastUserMessage: "research the topic thoroughly" }).effort, "high",
+  "'research' must not match the LOW keyword 'search'");
+assert.equal(route({ lastUserMessage: "tell me about terror in literature" }).effort, "high",
+  "'terror' must not match the HIGH keyword 'error'");
+assert.equal(route({ lastUserMessage: "give me information about X" }).effort, "high",
+  "'information' must not match LOW 'format'");
+// But standalone words still match.
+assert.equal(route({ lastUserMessage: "please search the codebase" }).effort, "low", "standalone 'search' -> low");
+assert.equal(route({ lastUserMessage: "I hit an error here" }).effort, "max", "standalone 'error' -> max");
+
 console.log("router e2e ok");

@@ -32,17 +32,22 @@ export class Agent {
   private autoRoute = false;
   private lastRoute?: string;
 
-  constructor(config: Config, mcpManager: MCPManager) {
-    this.config = config;
-    this.client = new DeepSeekClient(config.llm);
+  constructor(config: Config, mcpManager: MCPManager, opts: { isSubagent?: boolean } = {}) {
+    // Sub-agents get an isolated copy of config so their runtime mutations never
+    // bleed into the parent (or sibling) agents that share the original object.
+    this.config = opts.isSubagent ? structuredClone(config) : config;
+    this.client = new DeepSeekClient(this.config.llm);
     this.mcpManager = mcpManager;
-    this.maxIterations = config.agent.max_iterations;
+    this.maxIterations = this.config.agent.max_iterations;
 
-    this.registerRuntimeTool();
+    // Only the primary agent owns the global configure_deepseek_runtime tool.
+    // Sub-agents must not re-register it, or the last-constructed child would
+    // hijack the parent's runtime control (shared global tool registry).
+    if (!opts.isSubagent) this.registerRuntimeTool();
 
     const workspace = process.cwd();
-    const systemPrompt = config.agent.system_prompt
-      ? `${config.agent.system_prompt}\n\n${RUNTIME_SWITCHING_PROMPT}`
+    const systemPrompt = this.config.agent.system_prompt
+      ? `${this.config.agent.system_prompt}\n\n${RUNTIME_SWITCHING_PROMPT}`
       : assembleSystemPrompt({
           runtimeGuidance: RUNTIME_SWITCHING_PROMPT,
           projectInstructions: discoverProjectInstructions(workspace),

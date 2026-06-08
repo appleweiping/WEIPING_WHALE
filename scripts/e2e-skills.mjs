@@ -55,6 +55,13 @@ try {
   assert.equal(inst.resolveSource("https://github.com/a/b").url, "https://github.com/a/b.git");
   assert.equal(inst.resolveSource("not a source"), null, "garbage source rejected");
   assert.equal(inst.resolveSource("../../etc/passwd"), null, "traversal-y source rejected");
+  assert.equal(inst.resolveSource("github:../evil/x"), null, "traversal in shorthand rejected");
+  assert.equal(inst.resolveSource("owner/../repo"), null, ".. segment rejected");
+
+  // Install name validation: bad names are rejected (no silent underscore mapping).
+  const badName = inst.installSkill("owner/repo", { name: "../escape" });
+  assert.equal(badName.ok, false, "traversal install name rejected");
+  assert.match(badName.error, /invalid skill name/, "clear error for bad name");
 
   console.log("skills e2e ok");
 } finally {

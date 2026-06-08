@@ -7,7 +7,7 @@
  * disclosure — the model opens a skill's file on demand), and can be installed
  * from GitHub via `git clone`.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync, readdirSync, lstatSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import yaml from "js-yaml";
@@ -64,7 +64,10 @@ function findSkillFiles(dir: string, depth: number): string[] {
   for (const name of entries) {
     const full = join(dir, name);
     try {
-      if (statSync(full).isDirectory()) out.push(...findSkillFiles(full, depth + 1));
+      // Skip symlinks/junctions to avoid cycles and traversal outside the root.
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) out.push(...findSkillFiles(full, depth + 1));
     } catch {
       // ignore
     }

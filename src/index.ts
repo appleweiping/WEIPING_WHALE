@@ -203,7 +203,7 @@ async function main() {
   const subAgentManager = new SubAgentManager({
     config,
     mcpManager,
-    makeAgent: (cfg, mcp) => new Agent(cfg, mcp),
+    makeAgent: (cfg, mcp) => new Agent(cfg, mcp, { isSubagent: true }),
     maxAgents: config.subagents?.max_agents ?? 4,
     maxDepth: config.subagents?.max_depth ?? 2,
     depth: 0,
@@ -921,17 +921,21 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
           return true;
         }
         if (sub === "install") {
-          if (!subArg) {
-            printError("Usage: /skills install <owner/repo | github url>");
+          // Optional trailing "force" to overwrite an existing skill.
+          const tokens = subArg.split(/\s+/);
+          const force = tokens.includes("force") || tokens.includes("--force");
+          const source = tokens.filter((t) => t !== "force" && t !== "--force").join(" ").trim();
+          if (!source) {
+            printError("Usage: /skills install <owner/repo | github url> [force]");
             return true;
           }
-          printInfo(`Installing skill from ${subArg}...`);
-          const result = installSkill(subArg);
+          printInfo(`Installing skill from ${source}...`);
+          const result = installSkill(source, { force });
           if (result.ok) printInfo(`Installed skill '${result.name}' to ${result.path}. Restart to load it into the prompt.`);
           else printError(`Install failed: ${result.error}`);
           return true;
         }
-        printError("Usage: /skills <list|install owner/repo>");
+        printError("Usage: /skills <list|install owner/repo [force]>");
         return true;
       }
       case "approvals": {

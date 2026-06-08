@@ -4,7 +4,7 @@
  * Ported from CodeWhale's auto_reasoning design: a fast, zero-cost keyword
  * heuristic (NOT an extra LLM call) that picks a reasoning effort — and from it
  * a model preset — per turn, based on the latest user message. Multilingual
- * (English + CJK) keyword sets, defaulting to the middle tier.
+ * (English + CJK) keyword sets, defaulting to the high tier.
  *
  * Decision:
  *   - sub-agent context        -> low
@@ -58,13 +58,39 @@ export function route(ctx: RouteContext): RouteDecision {
   }
 
   // High-effort wins over low if both appear (be safe on hard tasks).
-  const high = HIGH_KEYWORDS.find((k) => text.includes(k));
+  const high = matchKeyword(text, HIGH_KEYWORDS);
   if (high) return fromEffort("max", `high-effort keyword "${high}"`);
 
-  const low = LOW_KEYWORDS.find((k) => text.includes(k));
+  const low = matchKeyword(text, LOW_KEYWORDS);
   if (low) return fromEffort("low", `low-effort keyword "${low}"`);
 
   return fromEffort("high", "no signal -> default high");
+}
+
+/**
+ * Match a keyword list against text. Latin keywords match on word boundaries
+ * (so "search" does not fire on "research"); CJK keywords have no word breaks,
+ * so they match as substrings.
+ */
+function matchKeyword(text: string, keywords: string[]): string | undefined {
+  for (const k of keywords) {
+    if (isLatin(k)) {
+      // Build a boundary-aware matcher: \b works for ASCII word chars.
+      const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(k)}(?:$|[^a-z0-9])`, "i");
+      if (re.test(text)) return k;
+    } else if (text.includes(k)) {
+      return k;
+    }
+  }
+  return undefined;
+}
+
+function isLatin(s: string): boolean {
+  return /^[\x00-\x7f]+$/.test(s);
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function fromEffort(effort: RouteEffort, reason: string): RouteDecision {

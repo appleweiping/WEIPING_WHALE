@@ -27,6 +27,10 @@ export interface SubAgentRecord {
 }
 
 const DONE_SENTINEL = "<weiping-whale:subagent.done>";
+const MAX_OBJECTIVE_CHARS = 8000;
+const MAX_RESULT_CHARS = 24000;
+const MAX_RECORDS = 50;
+const CHILD_TIMEOUT_MS = 300000; // 5 min hard wall-clock cap per child
 
 export interface SubAgentDeps {
   config: Config;
@@ -35,6 +39,7 @@ export interface SubAgentDeps {
   maxAgents: number;
   maxDepth: number;
   depth: number;
+  childTimeoutMs?: number;
 }
 
 export class SubAgentManager {
@@ -54,31 +59,49 @@ export class SubAgentManager {
 
   /** Spawn a background child agent. Returns its id, or an error string. */
   open(objective: string): { id?: string; error?: string } {
-    if (currentDepth() >= this.deps.maxDepth) {
+    // Depth check uses BOTH the async-context depth and the manager's own depth
+    // (belt-and-suspenders: if async context is ever lost, deps.depth still caps).
+    const effectiveDepth = Math.max(currentDepth(), this.deps.depth);
+    if (effectiveDepth >= this.deps.maxDepth) {
       return { error: `max sub-agent spawn depth (${this.deps.maxDepth}) reached` };
     }
     if (this.running >= this.deps.maxAgents) {
       return { error: `sub-agent pool is full (${this.deps.maxAgents} running); use agent_eval to collect results first` };
     }
-    const spawnDepth = currentDepth() + 1;
+    const trimmed = objective.slice(0, MAX_OBJECTIVE_CHARS);
+    const spawnDepth = effectiveDepth + 1;
     const id = this.newId();
     const record: SubAgentRecord = {
       id,
-      objective,
+      objective: trimmed,
       status: "running",
       startedAt: Date.now(),
       steps: 0,
     };
+    this.evictOldRecords();
     this.agents.set(id, record);
     this.running += 1;
 
     // Fire-and-forget; agent_eval polls for the result. The child runs inside an
     // async-context depth frame so its own agent_open calls see the deeper level.
-    void depthStore.run(spawnDepth, () => this.runChild(record, objective));
+    void depthStore.run(spawnDepth, () => this.runChild(record, trimmed));
     return { id };
   }
 
+  /** Evict the oldest finished records once we exceed the retention cap. */
+  private evictOldRecords(): void {
+    if (this.agents.size < MAX_RECORDS) return;
+    const finished = [...this.agents.values()]
+      .filter((r) => r.status !== "running")
+      .sort((a, b) => (a.finishedAt ?? a.startedAt) - (b.finishedAt ?? b.startedAt));
+    for (const r of finished) {
+      if (this.agents.size < MAX_RECORDS) break;
+      this.agents.delete(r.id);
+    }
+  }
+
   private async runChild(record: SubAgentRecord, objective: string): Promise<void> {
+    const timeoutMs = this.deps.childTimeoutMs ?? CHILD_TIMEOUT_MS;
     try {
       const child = this.deps.makeAgent(this.deps.config, this.deps.mcpManager);
       // Children route at low effort and never recurse past the depth cap.
@@ -86,16 +109,22 @@ export class SubAgentManager {
       const prompt =
         `You are a sub-agent with a single objective. Complete it autonomously, then give a concise ` +
         `summary of what you found or did.\n\nOBJECTIVE: ${objective}`;
-      const reply = await child.run(prompt, {
-        onToolEnd: () => {
-          record.steps += 1;
-        },
-      });
+      // Hard wall-clock cap so a hung child can never permanently hold a pool slot.
+      const reply = await Promise.race([
+        child.run(prompt, {
+          onToolEnd: () => {
+            record.steps += 1;
+          },
+        }),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error(`sub-agent timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs),
+        ),
+      ]);
       record.status = "completed";
-      record.result = reply;
+      record.result = reply.slice(0, MAX_RESULT_CHARS);
     } catch (err: any) {
       record.status = "failed";
-      record.error = String(err?.message ?? err);
+      record.error = String(err?.message ?? err).slice(0, 2000);
     } finally {
       record.finishedAt = Date.now();
       this.running = Math.max(0, this.running - 1);

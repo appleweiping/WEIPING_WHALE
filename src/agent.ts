@@ -6,6 +6,11 @@ import {
   SUMMARY_SYSTEM_PROMPT,
   type CompactionPlan,
 } from "./compaction.js";
+import {
+  assembleSystemPrompt,
+  discoverProjectInstructions,
+  readHandoff,
+} from "./prompts/assemble.js";
 import { getToolDefs, getTool, registerTool } from "./tools/registry.js";
 import { MCPManager } from "./mcp/manager.js";
 import {
@@ -15,11 +20,6 @@ import {
   type Config,
 } from "./config.js";
 import { safeErrorMessage } from "./runtime/safe-text.js";
-
-const SYSTEM_PROMPT = `You are DeepSeek CLI, an interactive coding agent running in the user's terminal.
-You can read/write files, execute commands, and search code to help the user with software engineering tasks.
-Be direct and concise. Use tools to gather information before answering when needed.
-When you have MCP tools available (prefixed with mcp_), use them as appropriate.`;
 
 export class Agent {
   private client: DeepSeekClient;
@@ -36,7 +36,14 @@ export class Agent {
 
     this.registerRuntimeTool();
 
-    const systemPrompt = `${config.agent.system_prompt || SYSTEM_PROMPT}\n\n${RUNTIME_SWITCHING_PROMPT}`;
+    const workspace = process.cwd();
+    const systemPrompt = config.agent.system_prompt
+      ? `${config.agent.system_prompt}\n\n${RUNTIME_SWITCHING_PROMPT}`
+      : assembleSystemPrompt({
+          runtimeGuidance: RUNTIME_SWITCHING_PROMPT,
+          projectInstructions: discoverProjectInstructions(workspace),
+          handoff: readHandoff(workspace),
+        });
     this.messages.push({ role: "system", content: systemPrompt });
   }
 
@@ -87,6 +94,35 @@ export class Agent {
 
   restoreMessages(messages: Message[]) {
     this.messages = messages;
+  }
+
+  /**
+   * Generate a session handoff relay from the current conversation, WITHOUT
+   * mutating the conversation. Returns markdown suitable for handoff.md.
+   */
+  async generateHandoff(): Promise<string> {
+    const transcript = this.messages
+      .filter((m) => m.role !== "system")
+      .map((m) => {
+        const calls = m.tool_calls?.map((t) => t.function.name).join(",");
+        const body = typeof m.content === "string" ? m.content.slice(0, 1200) : "";
+        return `[${m.role}${calls ? ` calls=${calls}` : ""}] ${body}`;
+      })
+      .join("\n")
+      .slice(-16000);
+    const prompt =
+      "Write a concise session handoff relay in markdown with these sections: " +
+      "## Open Issues, ## In-Flight Changes, ## Next Steps, ## Key Decisions. " +
+      "Base it strictly on the transcript below. Be specific (file paths, choices). " +
+      "Output only the markdown.\n\n" +
+      transcript;
+    const result = await this.client.complete({
+      messages: [
+        { role: "system", content: "You write succinct, factual engineering handoffs." },
+        { role: "user", content: prompt },
+      ],
+    });
+    return (result.content ?? "").trim() || "## Open Issues\n(none recorded)\n";
   }
 
   /**

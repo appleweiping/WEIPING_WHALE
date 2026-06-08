@@ -11,6 +11,7 @@ import { getWriteMode, setWriteMode } from "./safety/patches.js";
 import { getSandboxMode, setSandboxMode } from "./safety/sandbox.js";
 import { runShellCommand } from "./tools/bash.js";
 import { backtrackMessages, createSessionId, forkSession, formatSessionInfo, listSessions, loadSession, resolveSessionRef, saveSession, sessionDir } from "./session.js";
+import { writeHandoff } from "./prompts/assemble.js";
 import { memoryDiagnostics, saveSessionMemory, type SessionMemoryResult } from "./memory.js";
 import { VERSION } from "./runtime/version.js";
 import { endpointConfigured, endpointHost, safeErrorMessage } from "./runtime/safe-text.js";
@@ -636,6 +637,7 @@ const COMMAND_DEFS = [
   { name: "compact", args: "[fast]", description: "summarize older context (model summary; 'fast' = offline heuristic)" },
   { name: "snapshots", args: "", description: "list workspace snapshots (side-git checkpoints)", submit: true },
   { name: "cost", args: "", description: "show session token usage, cost, and cache-hit ratio", submit: true },
+  { name: "handoff", args: "[text]", description: "write a session relay to .weiping-whale/handoff.md (model-generated if no text)" },
   { name: "restore", args: "<id>", description: "restore workspace files to a snapshot id" },
   { name: "undo", args: "", description: "undo the most recent workspace change via snapshots", submit: true },
   { name: "approvals", args: "", description: "list pending shell approvals", submit: true },
@@ -645,8 +647,8 @@ const COMMAND_DEFS = [
   { name: "apply", args: "<id>", description: "apply a pending file patch" },
   { name: "reject", args: "<id>", description: "reject a pending file patch" },
   { name: "clear", args: "", description: "clear the terminal", submit: true },
-  { name: "exit", args: "", description: "quit DeepSeek CLI", submit: true },
-  { name: "quit", args: "", description: "quit DeepSeek CLI", submit: true },
+  { name: "exit", args: "", description: "quit WEIPING_WHALE", submit: true },
+  { name: "quit", args: "", description: "quit WEIPING_WHALE", submit: true },
   { name: "todo", args: "<add|done|start|remove|clear|list>", description: "manage persistent task list" },
   { name: "monitor", args: "<start|stop|logs|list>", description: "run and watch background processes" },
   { name: "mode", args: "<auto|plan|ask>", description: "set execution mode: auto (run freely), plan (think first), ask (confirm each edit)" },
@@ -860,6 +862,23 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
             `cache_hit_ratio: ${ratio == null ? "n/a" : `${Math.round(ratio * 100)}%`}`,
           ].join("\n"),
         );
+        return true;
+      }
+      case "handoff": {
+        let content: string;
+        if (arg.trim()) {
+          content = arg.trim();
+        } else {
+          printInfo("Generating session handoff relay...");
+          try {
+            content = await context.agent.generateHandoff();
+          } catch (err: any) {
+            printError(`Handoff generation failed: ${safeErrorMessage(err)}`);
+            return true;
+          }
+        }
+        const path = writeHandoff(process.cwd(), content);
+        printInfo(`Wrote handoff relay to ${path}`);
         return true;
       }
       case "approvals": {

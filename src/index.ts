@@ -247,6 +247,21 @@ async function main() {
     return saveSessionMemory({ sessionId, cwd: process.cwd(), runtime: agent.getRuntime(), messages: agent.getMessages(), status, note, error });
   };
 
+  // Single serialization point for ALL agent turns (REPL input AND the HTTP API),
+  // so two turns never run concurrently on the shared message history.
+  let turnChain: Promise<unknown> = Promise.resolve();
+  const runAgentTurn = (message: string, note: string, images: ReturnType<typeof getPendingImages> = []): Promise<string> => {
+    const result = turnChain.then(async () => {
+      snapshotManager.beforeTurn();
+      const reply = await agent.run(message, events, images);
+      snapshotManager.afterTurn();
+      await persistSnapshot("completed", note);
+      return reply;
+    });
+    turnChain = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
   if (task) {
     try {
       snapshotManager.beforeTurn();
@@ -281,19 +296,8 @@ async function main() {
   // by default; requires a bearer token (auto-generated and printed once).
   let apiHandle: RuntimeApiHandle | undefined;
   if (args.includes("--serve")) {
-    let serveChain: Promise<void> = Promise.resolve();
-    const runTurn = (message: string): Promise<string> => {
-      // Serialize turns through the single agent so HTTP requests can't interleave.
-      const result = serveChain.then(async () => {
-        snapshotManager.beforeTurn();
-        const reply = await agent.run(message, events);
-        snapshotManager.afterTurn();
-        await persistSnapshot("completed", "api turn completed");
-        return reply;
-      });
-      serveChain = result.then(() => undefined, () => undefined);
-      return result;
-    };
+    // Route API turns through the SAME turnChain as the REPL so they serialize.
+    const runTurn = (message: string): Promise<string> => runAgentTurn(message, "api turn completed");
     try {
       const host = readFlag(args, "--host");
       const portStr = readFlag(args, "--port");
@@ -340,12 +344,9 @@ async function main() {
     }
 
     try {
-      snapshotManager.beforeTurn();
       const turnImages = getPendingImages();
       clearPendingImages();
-      const reply = await agent.run(line, events, turnImages);
-      snapshotManager.afterTurn();
-      await persistSnapshot("completed", "assistant reply completed");
+      const reply = await runAgentTurn(line, "assistant reply completed", turnImages);
       printAssistant(reply);
       printFooter(costTracker.footer(), costTracker.cacheColor());
     } catch (err: any) {

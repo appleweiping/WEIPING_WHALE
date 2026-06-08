@@ -8,9 +8,9 @@
  * a blocker.
  */
 import { spawn, type ChildProcess } from "child_process";
-import { extname } from "path";
+import { extname, join, delimiter, resolve as resolvePath } from "path";
 import { pathToFileURL } from "url";
-import { readFileSync } from "fs";
+import { existsSync, statSync, readFileSync } from "fs";
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -39,14 +39,14 @@ interface LangServerSpec {
 const SERVERS: LangServerSpec[] = [
   {
     id: "typescript",
-    command: process.platform === "win32" ? "typescript-language-server.cmd" : "typescript-language-server",
+    command: "typescript-language-server",
     args: ["--stdio"],
     extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     languageId: "typescript",
   },
   {
     id: "pyright",
-    command: process.platform === "win32" ? "pyright-langserver.cmd" : "pyright-langserver",
+    command: "pyright-langserver",
     args: ["--stdio"],
     extensions: [".py", ".pyi"],
     languageId: "python",
@@ -54,6 +54,7 @@ const SERVERS: LangServerSpec[] = [
 ];
 
 const SEVERITY_MAP: Record<number, Severity> = { 1: "error", 2: "warning", 3: "info", 4: "hint" };
+const MAX_LSP_FILE_BYTES = 2 * 1024 * 1024; // skip diagnostics for files larger than 2MB
 
 interface LiveServer {
   proc: ChildProcess;
@@ -72,6 +73,7 @@ export interface LspOptions {
 
 export class LspManager {
   private servers = new Map<string, LiveServer | null>(); // null = tried and unavailable
+  private starting = new Map<string, Promise<LiveServer | null>>(); // in-flight startups
   private opts: Required<LspOptions>;
   private workspace: string;
 
@@ -105,12 +107,21 @@ export class LspManager {
 
     const uri = pathToFileURL(file).toString();
     const key = canonicalUri(uri);
+    // Size cap: skip very large files to avoid memory pressure and slow/hung
+    // LSP notifications.
+    try {
+      if (statSync(file).size > MAX_LSP_FILE_BYTES) return [];
+    } catch {
+      return [];
+    }
     let text: string;
     try {
       text = readFileSync(file, "utf-8");
     } catch {
       return [];
     }
+    // Skip apparently-binary content (NUL byte in the first chunk).
+    if (text.length > 0 && text.indexOf("\0") !== -1) return [];
 
     server.diagnostics.delete(key);
     if (!isAlive(server)) return [];
@@ -160,14 +171,36 @@ export class LspManager {
 
   private async ensureServer(spec: LangServerSpec): Promise<LiveServer | null> {
     if (this.servers.has(spec.id)) return this.servers.get(spec.id)!;
+    // Memoize the in-flight startup so concurrent diagnose() calls for the same
+    // language share ONE server (otherwise each would spawn an orphan).
+    const pending = this.starting.get(spec.id);
+    if (pending) return pending;
+    const startPromise = this.startServer(spec).finally(() => this.starting.delete(spec.id));
+    this.starting.set(spec.id, startPromise);
+    return startPromise;
+  }
+
+  private async startServer(spec: LangServerSpec): Promise<LiveServer | null> {
+    // SECURITY: resolve the language-server executable to a trusted ABSOLUTE path
+    // via PATH, explicitly EXCLUDING the workspace, so a malicious workspace
+    // cannot plant a same-named binary. We then spawn that absolute path. On
+    // Windows the resolved path is a .cmd shim which requires a shell to run —
+    // but since the path is absolute and already verified outside the workspace,
+    // no further PATH resolution happens, so there is no hijack window.
+    const exe = resolveExecutable(spec.command, this.workspace);
+    if (!exe) {
+      this.servers.set(spec.id, null);
+      return null;
+    }
+    const needsShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(exe);
 
     let proc: ChildProcess;
     try {
-      proc = spawn(spec.command, spec.args, {
+      proc = spawn(needsShell ? `"${exe}"` : exe, spec.args, {
         cwd: this.workspace,
         stdio: ["pipe", "pipe", "pipe"],
-        // On Windows the language servers are .cmd shims that require a shell.
-        shell: process.platform === "win32",
+        shell: needsShell,
+        windowsHide: true,
       });
     } catch {
       this.servers.set(spec.id, null);
@@ -256,6 +289,41 @@ function isAlive(server: LiveServer): boolean {
 }
 
 /**
+ * Resolve an executable to a trusted absolute path via PATH, EXCLUDING the
+ * workspace (and any directory inside it). Returns null if not found. This
+ * prevents a malicious workspace from planting a same-named binary that would
+ * run when diagnostics fire. On Windows, tries PATHEXT extensions.
+ */
+function resolveExecutable(command: string, workspace: string): string | null {
+  const wsReal = (() => {
+    try { return resolvePath(workspace).toLowerCase(); } catch { return resolvePath(workspace); }
+  })();
+  const isInsideWorkspace = (p: string) => {
+    const rp = resolvePath(p).toLowerCase();
+    return rp === wsReal || rp.startsWith(wsReal + (process.platform === "win32" ? "\\" : "/"));
+  };
+  const exts = process.platform === "win32"
+    ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").map((e) => e.toLowerCase())
+    : [""];
+  const pathDirs = (process.env.PATH || "").split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    // Skip any PATH entry that lives inside the workspace.
+    if (isInsideWorkspace(dir)) continue;
+    for (const ext of exts) {
+      const candidate = join(dir, command + ext);
+      try {
+        if (existsSync(candidate) && statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Send a notification without ever surfacing an error — neither the synchronous
  * throw nor the async write rejection (vscode-jsonrpc resolves the write on a
  * later tick, so a destroyed stream would otherwise become an unhandled rejection).
@@ -275,8 +343,13 @@ function safeNotify(server: LiveServer, method: string, params: unknown): void {
 /** Render diagnostics as a compact block for the model. */
 export function renderDiagnostics(file: string, diags: Diagnostic[]): string | undefined {
   if (diags.length === 0) return undefined;
-  const lines = diags.map((d) => `  ${d.severity.toUpperCase()} [${d.line}:${d.column}] ${d.message}`);
-  return `<diagnostics file="${file}">\n${lines.join("\n")}\n</diagnostics>`;
+  // Escape file path and messages: LSP output is UNTRUSTED (a hostile file path
+  // or diagnostic text could otherwise inject a closing tag + fake model-facing
+  // instructions). Strip control chars and neutralize angle brackets.
+  const esc = (s: string) =>
+    s.replace(/[\u0000-\u001f]/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = diags.map((d) => `  ${d.severity.toUpperCase()} [${d.line}:${d.column}] ${esc(d.message)}`);
+  return `<diagnostics file="${esc(file)}" note="untrusted tool output">\n${lines.join("\n")}\n</diagnostics>`;
 }
 
 function severityRank(s: Severity): number {

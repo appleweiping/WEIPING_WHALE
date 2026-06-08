@@ -7,6 +7,14 @@ import { LspManager, renderDiagnostics } from "./manager.js";
 let active: LspManager | null = null;
 
 export function setActiveLspManager(m: LspManager | null): void {
+  // Dispose any previous manager so its language-server processes are reaped.
+  if (active && active !== m) {
+    try {
+      active.dispose();
+    } catch {
+      // ignore
+    }
+  }
   active = m;
 }
 export function getActiveLspManager(): LspManager | null {

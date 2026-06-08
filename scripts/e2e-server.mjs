@@ -54,8 +54,12 @@ try {
   });
   assert.equal(empty.status, 400, "empty message -> 400");
 
-  // 7. SSE stream emits start/reply/done.
-  const sse = await fetch(`${root}/v1/stream?message=hi`, { headers: auth });
+  // 7. SSE stream is now POST (prompt in body, not URL); emits start/reply/done.
+  const sse = await fetch(`${root}/v1/stream`, {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "hi" }),
+  });
   assert.equal(sse.status, 200, "stream 200");
   assert.match(sse.headers.get("content-type") || "", /text\/event-stream/, "sse content-type");
   const text = await sse.text();
@@ -64,9 +68,17 @@ try {
   assert.match(text, /echo: hi/, "sse reply payload");
   assert.match(text, /event: done/, "sse done event");
 
+  // 7b. GET on stream is no longer supported (must be POST).
+  const sseGet = await fetch(`${root}/v1/stream?message=hi`, { headers: auth });
+  assert.equal(sseGet.status, 404, "GET /v1/stream -> 404 (POST only)");
+
   // 8. unknown path -> 404.
   const nf = await fetch(`${root}/nope`);
   assert.equal(nf.status, 404, "unknown path 404");
+
+  // 9. case-insensitive bearer scheme is accepted.
+  const lower = await fetch(`${root}/v1/cost`, { headers: { Authorization: `bearer ${api.token}` } });
+  assert.equal(lower.status, 200, "lowercase 'bearer' scheme accepted");
 
   console.log("server e2e ok");
 } finally {

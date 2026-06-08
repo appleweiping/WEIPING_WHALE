@@ -9,7 +9,7 @@ import { classifyShellCommand, getApprovalMode, listShellApprovals, rejectShellA
 import { getWriteMode, setWriteMode } from "./safety/patches.js";
 import { getSandboxMode, setSandboxMode } from "./safety/sandbox.js";
 import { runShellCommand } from "./tools/bash.js";
-import { createSessionId, formatSessionInfo, listSessions, loadSession, saveSession, sessionDir } from "./session.js";
+import { backtrackMessages, createSessionId, forkSession, formatSessionInfo, listSessions, loadSession, resolveSessionRef, saveSession, sessionDir } from "./session.js";
 import { memoryDiagnostics, saveSessionMemory, type SessionMemoryResult } from "./memory.js";
 import { VERSION } from "./runtime/version.js";
 import { endpointConfigured, endpointHost, safeErrorMessage } from "./runtime/safe-text.js";
@@ -105,8 +105,18 @@ async function main() {
     process.exit(0);
   }
 
-  const resumeSessionId = readFlag(args, "--resume");
-  const sessionId = readFlag(args, "--session") ?? resumeSessionId ?? createSessionId();
+  const resumeFlag = readFlag(args, "--resume");
+  const wantLast = args.includes("--last");
+  // Resolve resume reference: --last, --resume <id|prefix|last>.
+  let resumeSessionId: string | undefined;
+  let resumeError: string | undefined;
+  if (wantLast || resumeFlag !== undefined) {
+    const ref = wantLast ? "last" : (resumeFlag || "last");
+    const resolved = resolveSessionRef(ref);
+    if (resolved.session) resumeSessionId = resolved.session.id;
+    else resumeError = resolved.error;
+  }
+  let sessionId = readFlag(args, "--session") ?? resumeSessionId ?? createSessionId();
   const task = readFlag(args, "-t") ?? readFlag(args, "--task") ?? readPositionalTask(args);
 
   const config = loadConfig();
@@ -147,6 +157,10 @@ async function main() {
   }
 
   const agent = new Agent(config, mcpManager);
+  if ((wantLast || resumeFlag !== undefined) && !resumeSessionId) {
+    printCliError(resumeError ?? "could not resolve session to resume", json);
+    process.exit(1);
+  }
   if (resumeSessionId) {
     const saved = loadSession(resumeSessionId);
     if (!saved) {
@@ -214,7 +228,19 @@ async function main() {
   banner(agent.getRuntime(), process.cwd(), stats());
   printInfo(formatSessionInfo(sessionId));
 
-  const commandContext: CommandContext = { agent, sessionId, stats, mcpManager, config, snapshotManager, persistSnapshot };
+  const commandContext: CommandContext = {
+    agent,
+    sessionId,
+    setSessionId: (id: string) => {
+      sessionId = id;
+      commandContext.sessionId = id;
+    },
+    stats,
+    mcpManager,
+    config,
+    snapshotManager,
+    persistSnapshot,
+  };
   const rl = createRL((context) => buildSlashMenu(context.line, context.cursor));
   rl.prompt();
   let lineQueue = Promise.resolve();
@@ -557,6 +583,7 @@ async function runApprovedShellCommand(id: string): Promise<string> {
 interface CommandContext {
   agent: Agent;
   sessionId: string;
+  setSessionId: (id: string) => void;
   stats: () => ReturnType<typeof currentStats>;
   mcpManager: MCPManager;
   config: Config;
@@ -585,6 +612,8 @@ const COMMAND_DEFS = [
   { name: "tools", args: "", description: "list built-in and MCP tools", submit: true },
   { name: "mcp", args: "<status|reconnect>", description: "inspect or reconnect MCP servers" },
   { name: "sessions", args: "[n]", description: "list recent saved sessions" },
+  { name: "fork", args: "", description: "fork the current session into a new branchable session", submit: true },
+  { name: "backtrack", args: "[n]", description: "rewind the conversation n user-turns back (default 1)" },
   { name: "memory", args: "<save|status>", description: "save current session summary to agentmemory" },
   { name: "retry", args: "", description: "retry the last user request after a network failure", submit: true },
   { name: "permissions", args: "<setting>", description: "permission model, approval, sandbox, and write-mode controls" },
@@ -740,6 +769,28 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
         console.log(formatSessionInfo(context.sessionId));
         return true;
+      case "fork": {
+        // Persist current state, then create a child sharing the history.
+        const parentId = context.sessionId;
+        saveSession(parentId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
+        const childId = forkSession(parentId, process.cwd(), context.agent.getRuntime());
+        if (!childId) {
+          printError("Cannot fork: current session has no messages yet.");
+          return true;
+        }
+        context.setSessionId(childId);
+        printInfo(`Forked into new session ${childId} (parent: ${parentId}). Continuing on the fork.`);
+        console.log(formatSessionInfo(childId));
+        return true;
+      }
+      case "backtrack": {
+        const steps = arg ? Math.max(1, Number(arg) || 1) : 1;
+        const rewound = backtrackMessages(context.agent.getMessages(), steps);
+        context.agent.restoreMessages(rewound);
+        saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
+        printInfo(`Rewound ${steps} user-turn(s); conversation now has ${rewound.length} message(s).`);
+        return true;
+      }
       case "compact": {
         const keep = arg ? Number(arg) : 12;
         const message = context.agent.compactContext(Number.isFinite(keep) ? keep : 12);
@@ -977,7 +1028,15 @@ function printSessions(limit: number) {
     console.log("No saved sessions.");
     return;
   }
-  console.log(sessions.map((session) => `${session.id} updated=${session.updated_at} messages=${session.messages.length} cwd=${session.cwd}`).join("\n"));
+  console.log(
+    sessions
+      .map((session) => {
+        const title = session.title ? ` "${session.title}"` : "";
+        const fork = session.parent_session_id ? ` fork<-${session.parent_session_id.slice(0, 16)}` : "";
+        return `${session.id}${title} updated=${session.updated_at} messages=${session.messages.length}${fork} cwd=${session.cwd}`;
+      })
+      .join("\n"),
+  );
 }
 
 function printMemoryResult(result: SessionMemoryResult) {

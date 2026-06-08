@@ -159,11 +159,17 @@ export class SnapshotRepo {
   }
 
   /** Raw git invocation against the side repo + user workspace. Never throws. */
-  private git(args: string[], timeoutMs = 60000): { code: number; stdout: string; stderr: string } {
+  private git(args: string[], timeoutMs = 60000, envOverride?: Record<string, string>): { code: number; stdout: string; stderr: string } {
     const result = spawnSync(
       "git",
       ["--git-dir", this.gitDir, "--work-tree", this.workspace, ...args],
-      { cwd: this.workspace, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
+      {
+        cwd: this.workspace,
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 64 * 1024 * 1024,
+        env: envOverride ? { ...process.env, ...envOverride } : process.env,
+      },
     );
     return {
       code: result.status ?? (result.error ? -1 : 0),
@@ -278,11 +284,17 @@ export class SnapshotRepo {
   /** True if the workspace already byte-matches the given snapshot. */
   matches(sha: string): boolean {
     if (!this.available) return false;
-    // Refresh the index so the diff reflects the current worktree, not whatever
-    // the index held after the last snapshot/restore.
-    this.git(["add", "-A"]);
-    const diff = this.git(["diff", "--quiet", "--cached", sha, "--", ":/"]);
-    return diff.code === 0;
+    const release = this.acquireLock(2000);
+    if (!release) return false;
+    try {
+      // Refresh the index so the diff reflects the current worktree, not whatever
+      // the index held after the last snapshot/restore.
+      this.git(["add", "-A"]);
+      const diff = this.git(["diff", "--quiet", "--cached", sha, "--", ":/"]);
+      return diff.code === 0;
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -426,7 +438,10 @@ export class SnapshotRepo {
         const tree = treeRes.stdout.trim();
         const args = ["commit-tree", tree, "-m", snap.label];
         if (prevOrphan) args.push("-p", prevOrphan);
-        const c = this.git(args);
+        // Preserve the original snapshot time so retention aging still works
+        // and listed timestamps stay accurate after a prune rebuild.
+        const iso = new Date(snap.timestamp * 1000).toISOString();
+        const c = this.git(args, 60000, { GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso });
         if (c.code !== 0) continue;
         prevOrphan = c.stdout.trim();
       }

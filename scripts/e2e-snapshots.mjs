@@ -92,6 +92,26 @@ try {
     rmSync(outside, { recursive: true, force: true });
   }
 
+  // Prune behavior + timestamp integrity. Use SnapshotRepo directly.
+  const repoMod = await import("../src/snapshot/repo.ts");
+  const repo = new repoMod.SnapshotRepo(ws, { retentionDays: 7 });
+  repo.init();
+  writeFileSync(fileA, "p1\n", "utf-8");
+  repo.snapshot("keep:1");
+  writeFileSync(fileA, "p2\n", "utf-8");
+  const ps2 = repo.snapshot("keep:2");
+  const before = repo.list(20);
+  const ts2 = before.find((s) => s.id === ps2)?.timestamp;
+  assert.ok(ts2 && ts2 > 1_600_000_000, `snapshot timestamp should be a real unix time: ${ts2}`);
+  // days<=0 is a guarded no-op (must not wipe anything).
+  repo.pruneOlderThanDays(0);
+  assert.equal(repo.list(20).length, before.length, "prune(0) is a no-op guard");
+  // A far-future retention keeps everything (no rebuild, no loss).
+  repo.pruneOlderThanDays(3650);
+  assert.equal(repo.list(20).length, before.length, "generous retention keeps all snapshots");
+  // workspaceKey is a stable 32-char hex (SHA-256 derived), not the old FNV-16.
+  assert.match(repoMod.workspaceKey(ws), /^[0-9a-f]{32}$/, "workspaceKey is sha256-derived hex");
+
   console.log("snapshot e2e ok");
 } finally {
   rmSync(ws, { recursive: true, force: true });

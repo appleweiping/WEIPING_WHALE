@@ -30,6 +30,21 @@ export interface Config {
     workspace: string;
     system_prompt: string;
   };
+  snapshots?: {
+    enabled?: boolean;
+    retention_days?: number;
+  };
+  pricing?: Record<string, { cache_hit_usd?: number; cache_miss_usd?: number; output_usd?: number }>;
+  subagents?: {
+    max_agents?: number;
+    max_depth?: number;
+  };
+  lsp?: {
+    enabled?: boolean;
+    include_warnings?: boolean;
+    poll_after_edit_ms?: number;
+    max_per_file?: number;
+  };
   mcp_servers: Record<string, MCPServerConfig>;
 }
 
@@ -131,6 +146,20 @@ const DEFAULT_CONFIG: Config = {
     workspace: ".",
     system_prompt: "",
   },
+  snapshots: {
+    enabled: true,
+    retention_days: 7,
+  },
+  subagents: {
+    max_agents: 4,
+    max_depth: 2,
+  },
+  lsp: {
+    enabled: true,
+    include_warnings: false,
+    poll_after_edit_ms: 2500,
+    max_per_file: 20,
+  },
   mcp_servers: {},
 };
 
@@ -139,9 +168,13 @@ export function loadConfig(): Config {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
   const configPaths = [
+    process.env.WEIPING_WHALE_CONFIG,
     process.env.DEEPSEEK_CONFIG,
+    join(process.cwd(), "weiping-whale.toml"),
+    join(process.cwd(), ".weiping-whale.toml"),
     join(process.cwd(), "deepseek-cli.toml"),
     join(process.cwd(), ".deepseek-cli.toml"),
+    join(homedir(), ".weiping-whale", "config.toml"),
     join(homedir(), ".deepseek-cli", "config.toml"),
     join(packageRoot, "config.toml"),
   ];

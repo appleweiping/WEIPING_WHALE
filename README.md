@@ -1,72 +1,144 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/appleweiping/DEEPSEEK_CLI/master/assets/banner.png" alt="DEEPSEEK_CLI" width="720" />
+  <strong>WEIPING_WHALE — a terminal-native DeepSeek coding agent.</strong>
 </p>
 
 <p align="center">
-  <strong>Terminal-native DeepSeek coding agent with honest diagnostics, safe patch previews, MCP, sessions, and agentmemory outbox support.</strong>
+  Side-git snapshots · session fork/backtrack · auto model routing · skills ·
+  sub-agents · LSP diagnostics · live cost tracking · MCP · optional local HTTP/SSE API.
 </p>
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/deepseek-cli-agent"><img src="https://img.shields.io/npm/v/deepseek-cli-agent?color=CB3837&label=npm&style=for-the-badge&logo=npm" alt="npm version" /></a>
-  <a href="https://github.com/appleweiping/DEEPSEEK_CLI/blob/master/LICENSE"><img src="https://img.shields.io/github/license/appleweiping/DEEPSEEK_CLI?color=blue&style=for-the-badge" alt="License" /></a>
-</p>
+WEIPING_WHALE is a focused coding-agent CLI for people who want a small, honest
+terminal tool rather than a web app. It inspects files, searches with glob/grep,
+runs shell commands behind approval gates, previews edits as patches, checkpoints
+your workspace around every turn so you can `/undo`, routes between DeepSeek models
+per turn, connects MCP servers, and can expose a localhost HTTP/SSE control surface.
 
-DEEPSEEK_CLI is a focused coding-agent CLI for people who want a small terminal tool rather than a web app. It can inspect files, search with glob/grep, run shell commands behind approval gates, preview file edits as patches, connect MCP servers, resume saved sessions, and write compact session summaries to agentmemory when available.
-
-The project goal is honesty over spectacle: `deepseek --doctor --json` reports exactly what is configured, what is missing, and where local state will be written without exposing API keys or raw provider URLs.
+> **Based on [CodeWhale](https://github.com/Hmbown/CodeWhale) (MIT).** WEIPING_WHALE
+> re-implements CodeWhale's feature set in TypeScript. CodeWhale is the mature Rust
+> implementation of the same idea; this is a smaller, hackable TS sibling.
+> Not affiliated with DeepSeek Inc.
 
 ## Install
 
 ```bash
-npm install -g deepseek-cli-agent
+npm install -g weiping-whale
 ```
 
 Or run from source:
 
 ```bash
-git clone https://github.com/appleweiping/DEEPSEEK_CLI.git
-cd DEEPSEEK_CLI
+git clone https://github.com/appleweiping/WEIPING_WHALE.git
+cd WEIPING_WHALE
 npm ci
 npm run build
 node dist/index.js --doctor
 ```
 
-The 2026-06-04 upgrade pass ran Universal Upgrade Forge for 108 iterations and
-materialized the public project identity as `DEEPSEEK_CLI`. See
-[`docs/releases/2026-06-04-uupf-deepseek-cli-upgrade.md`](docs/releases/2026-06-04-uupf-deepseek-cli-upgrade.md).
+The CLI installs three binaries: `weiping-whale`, `wwhale`, and `deepseek` (a
+back-compat alias). State lives in `~/.weiping-whale/` (falling back to a legacy
+`~/.deepseek-cli/` if present, so existing sessions keep working).
 
 ## First Run
 
 ```bash
 export DEEPSEEK_API_KEY="<your-key>"
-deepseek --doctor
-deepseek
+wwhale --doctor
+wwhale
 ```
 
-Useful commands:
+Useful invocations:
 
 ```bash
-deepseek -t "summarize the architecture of this repo"
-deepseek --model pro --thinking max -t "review this change for security and test gaps"
-deepseek --model flash --thinking off -t "format these notes into markdown"
-deepseek --models
-deepseek --doctor --json
+wwhale -t "summarize the architecture of this repo"
+wwhale --model auto -t "find and fix the failing test"
+wwhale --model pro --thinking max -t "review this change for security gaps"
+wwhale --last
+wwhale --serve --port 7878
 ```
 
-## What It Does
+## Features
 
-| Area | Behavior |
+| Area | What it does |
 | --- | --- |
-| Model runtime | DeepSeek V4 Pro/Flash presets, thinking controls, runtime switching tool |
+| Model runtime | DeepSeek V4 Pro/Flash presets, thinking controls, `--model auto` per-turn routing |
 | File work | `read_file`, `write_file`, `edit_file`, `glob`, `grep` |
-| Shell work | `execute_bash` with blocked-command rules, approval queue, and bounded timeout |
-| Patch safety | File writes default to preview; apply with `/apply <id>` |
-| Sessions | `~/.deepseek-cli/sessions`, named sessions, resume, compact |
-| Memory | agentmemory REST when reachable; local outbox when offline |
+| Shell work | `execute_bash` with blocked-command rules, approval queue, bounded timeout |
+| Patch safety | writes default to preview; apply with `/apply <id>` |
+| Snapshots | side-git checkpoints each turn; `/snapshots`, `/restore`, `/undo`, `revert_turn` |
+| Sessions | named sessions, `/fork`, `/backtrack`, `--last`, resume by id/prefix |
+| Cost | live cost + prefix-cache-hit footer chip; `/cost` |
+| Compaction | `/compact` (model summary) and `/compact fast` (offline), tool-call-safe |
+| Skills | workspace + global `SKILL.md` discovery; `/skills install owner/repo` |
+| Sub-agents | `agent_open` / `agent_eval` bounded background workers |
+| LSP | post-edit diagnostics from TypeScript + Python language servers |
+| Vision | attach images with `/image`; sent as `image_url` content blocks |
 | MCP | stdio MCP servers become normal tools with diagnostics |
-| Terminal UX | slash palette, nested command arguments, mouse support, wrapped-line editing |
+| HTTP API | optional `--serve` localhost control surface with bearer-token auth |
+| Memory | agentmemory REST when reachable; local outbox when offline |
 
-## Safety Profiles
+## Snapshots & undo
+
+Every turn is checkpointed into a **separate** git repository under
+`~/.weiping-whale/snapshots/` — your own `.git` is never touched. If a turn makes
+a mess, `/undo` rolls the workspace back, `/restore <id>` jumps to a specific
+snapshot, and the model can call `revert_turn` to undo its own edits.
+
+## Auto routing
+
+With `--model auto` (or `/model auto`), a fast zero-cost keyword heuristic picks
+the model and thinking level for each turn: hard signals (debug, error, 调试, デバッグ)
+route to `pro` + max thinking, light ones (search, format, 格式化) to `flash`, and
+everything else to a sensible default.
+
+## Skills
+
+Drop a folder containing a `SKILL.md` (YAML frontmatter `name` + `description`)
+into `.weiping-whale/skills/` (workspace) or `~/.weiping-whale/skills/` (global).
+WEIPING_WHALE also discovers `.claude/skills` and `.agents/skills` for cross-tool
+reuse, and can install from GitHub:
+
+```bash
+# inside the REPL
+/skills list
+/skills install owner/repo
+```
+
+## LSP diagnostics
+
+After a direct file write or `/apply`, WEIPING_WHALE asks a language server for
+diagnostics and feeds errors back to the model. Install the servers you want:
+
+```bash
+npm install -g typescript-language-server typescript   # TypeScript/JavaScript
+npm install -g pyright                                  # Python
+```
+
+Diagnostics are best-effort: if a server isn't installed, it's skipped silently.
+
+## HTTP/SSE API (optional, off by default)
+
+`wwhale --serve` starts a control surface bound to `127.0.0.1` that requires a
+bearer token (auto-generated and printed once at startup):
+
+```
+GET  /health                      # unauthenticated liveness
+GET  /v1/cost                     # session cost snapshot
+POST /v1/message  {"message":"…"} # run a turn, returns { reply }
+POST /v1/stream   {"message":"…"} # Server-Sent Events: start / reply / done
+```
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  -d '{"message":"list the open TODOs"}' \
+  http://127.0.0.1:7878/v1/message
+```
+
+Turns are serialized with the interactive REPL, in-flight turns and SSE
+connections are capped, and the prompt is sent in the request body (never the
+URL). Binding to a non-localhost host prints a loud warning — anyone who can
+reach the host and token can drive the agent.
+
+## Safety profiles
 
 Use `/permission-model <mode>` or the equivalent environment variables.
 
@@ -77,154 +149,63 @@ Use `/permission-model <mode>` or the equivalent environment variables.
 | `trusted` | direct | unrestricted | auto-run except blocked patterns |
 | `locked` | preview | read-only | never run risky commands |
 
-The default is `safe`. Broad destructive shell commands remain blocked even in permissive modes.
-
-## Diagnostics
-
-`deepseek --doctor --json` is designed for humans and CI:
-
-```json
-{
-  "ok": true,
-  "version": "0.2.0",
-  "runtime": {
-    "model": "deepseek-v4-flash",
-    "thinking": "enabled",
-    "reasoning_effort": "high"
-  },
-  "endpoint": {
-    "configured": true,
-    "host": "api.deepseek.com"
-  },
-  "auth": {
-    "api_key": "configured",
-    "source": "env"
-  },
-  "checks": []
-}
-```
-
-The command exits non-zero when required checks fail. It does not print API keys, bearer tokens, or full provider URLs.
+The default is `safe`. Broadly destructive shell commands stay blocked even in
+permissive modes. This is approval-gating, **not** an OS sandbox.
 
 ## Configuration
 
-DeepSeek CLI loads the first config file found in this order:
+WEIPING_WHALE loads the first config file it finds:
 
-1. `DEEPSEEK_CONFIG`
-2. `./deepseek-cli.toml`
-3. `./.deepseek-cli.toml`
-4. `~/.deepseek-cli/config.toml`
-5. packaged fallback `config.toml`
-
-Example:
+1. `WEIPING_WHALE_CONFIG` / `DEEPSEEK_CONFIG`
+2. `./weiping-whale.toml` / `./.weiping-whale.toml`
+3. `./deepseek-cli.toml` / `./.deepseek-cli.toml`
+4. `~/.weiping-whale/config.toml` / `~/.deepseek-cli/config.toml`
+5. the packaged fallback `config.toml`
 
 ```toml
 [llm]
 model = "flash"
 api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
-temperature = 0.3
-max_tokens = 4096
-request_timeout_ms = 120000
-thinking = "enabled"
-reasoning_effort = "high"
 
 [agent]
 workspace = "."
 max_iterations = 50
+
+[snapshots]
+enabled = true
+retention_days = 7
+
+[subagents]
+max_agents = 4
+max_depth = 2
+
+[lsp]
+enabled = true
+include_warnings = false
 ```
 
-Environment overrides:
+## Diagnostics
 
-| Variable | Values |
-| --- | --- |
-| `DEEPSEEK_API_KEY` | provider API key |
-| `DEEPSEEK_MODEL` | `pro`, `flash`, `chat`, `reasoner`, or a full model name |
-| `DEEPSEEK_THINKING` | `auto`, `on`, `off`, `high`, `max` |
-| `DEEPSEEK_REASONING_EFFORT` | `high`, `max` |
-| `DEEPSEEK_BASE_URL` | OpenAI-compatible DeepSeek endpoint |
-| `DEEPSEEK_APPROVAL_MODE` | `on-request`, `auto`, `never` |
-| `DEEPSEEK_WRITE_MODE` | `preview`, `direct` |
-| `DEEPSEEK_SANDBOX_MODE` | `workspace-write`, `read-only`, `unrestricted` |
-| `AGENTMEMORY_URL` | active agentmemory endpoint |
-| `DEEPSEEK_MEMORY_OUTBOX_DIR` | local memory outbox override |
-
-## MCP
-
-```toml
-[mcp_servers.agentmemory]
-command = "npx"
-args = ["-y", "@agentmemory/mcp"]
-
-[mcp_servers.agentmemory.env]
-AGENTMEMORY_URL = "http://localhost:3111"
-```
-
-Run `/mcp status`, `/mcp reconnect`, or `deepseek --doctor --json` to inspect connection state. Failed MCP servers do not crash the CLI; they show safe error metadata.
-
-## Relationship To The Other Vipin Tools
-
-`WEIPING_COUNCIL` is the multi-model debate and orchestration layer. It benefits from richer provider health and cross-model review.
-
-`deepseek-cli` is the lightweight terminal worker. It is best for fast local text/code tasks, patch previews, skill-guided maintenance, and inexpensive DeepSeek runs.
-
-`WEIPING_LAB` is the experiment/workbench surface. DeepSeek CLI can help maintain it, but the lab remains the place where reproducible experiment workflows should be exposed.
-
-The three projects should share operating discipline, not implementation bulk. This CLI intentionally keeps its core small and transparent.
-
-## Design Notes
-
-This release was shaped by reading concrete source modules from mature coding-agent CLIs instead of copying their surface marketing:
-
-| Project | Source patterns inspected | Local adaptation |
-| --- | --- | --- |
-| Google Gemini CLI | `packages/cli/src/config/settings-validation.ts`, `packages/core/src/config/storage.ts`, `packages/core/src/utils/retry.ts`, `packages/core/src/utils/errorParsing.ts` | compact config checks, safe doctor report, bounded retry behavior |
-| Aider | `aider/run_cmd.py`, `aider/models.py`, `tests/basic/test_run_cmd.py`, `tests/basic/test_models.py` | cross-platform shell output discipline, model preset clarity |
-| OpenCode | `packages/opencode/src/config/config.ts`, `packages/opencode/src/util/error.ts`, `packages/opencode/src/session/message-error.ts`, `packages/opencode/src/provider/model-status.ts` | safe error metadata, explicit runtime status, CI release scan |
-
-## Release Notes
-
-See [CHANGELOG.md](CHANGELOG.md) for version history.
-
-### 0.2.0 Upgrade Notes
-
-- `deepseek --doctor --json` now returns a structured diagnostic object and exits non-zero when required checks fail.
-- agentmemory is no longer mirrored into legacy markdown memory paths. Offline saves go to `~/.deepseek-cli/memory-outbox` or `DEEPSEEK_MEMORY_OUTBOX_DIR`.
-- Provider and MCP errors are redacted by default. Use explicit debug flags only when you are comfortable with local diagnostic details.
-- The packaged fallback config is public-safe and generic; personal/team operating rules belong in user or project config files.
-
-### Known Limitations
-
-- This package does not bundle a UI server; it is a terminal agent.
-- E2E tests avoid real DeepSeek API calls. Provider availability is validated through config diagnostics, not live completions.
-- Shell safety is pattern-based and conservative. Treat `trusted` mode as local full trust.
-- MCP servers only receive explicitly configured env plus a minimal process environment.
+`wwhale --doctor --json` prints a structured report (runtime, endpoint host, auth
+source, paths, safety modes, MCP state) and exits non-zero on required-check
+failures. It never prints API keys, tokens, or full provider URLs.
 
 ## Development
 
 ```bash
 npm ci
 npm run typecheck
-npm test
-npm pack --dry-run
+npm test          # build + e2e suites + package smoke + release scan
 ```
 
-`npm test` runs:
+## Relationship to CodeWhale
 
-1. bundle build
-2. no-network E2E CLI checks
-3. package install smoke test
-4. release scan for stale paths, secret-looking values, README/package mismatch, and outdated size claims
-
-## Maintenance Skill
-
-This repo includes `.codex/skills/deepseek-cli/SKILL.md`. Use it when planning, designing, developing, testing, releasing, maintaining, monitoring, and iterating this project. The skill requires:
-
-- live source scan before claims
-- concrete open-source code reference intake for non-trivial upgrades
-- strict local verification
-- post-batch multi-review scoring before commit
-- commit and push after accepted changes
+CodeWhale (formerly `deepseek-tui`) is a large, mature Rust coding agent.
+WEIPING_WHALE is an independent TypeScript project that ports CodeWhale's ideas
+at a much smaller scale, keeping the core hackable. Where CodeWhale ships OS
+sandboxing and a 7-language LSP stack, WEIPING_WHALE stays honest about being a
+TS tool: approval-gated shell (no OS sandbox) and a TypeScript/Python LSP subset.
 
 ## License
 

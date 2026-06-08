@@ -67,7 +67,7 @@ function json(args, options) {
 try {
   const version = run(["--version"]);
   assert.equal(version.status, 0, version.error?.message || version.stderr || version.stdout);
-  assert.match(version.stdout, /0\.2\.0/);
+  assert.match(version.stdout, /0\.3\.0/);
 
   const doctor = json(["--doctor"]);
   assert.equal(doctor.ok, true);
@@ -187,7 +187,7 @@ try {
   assert.equal(resumed.status, 0, resumed.stderr || resumed.stdout || resumed.error?.message);
   assert.match(resumed.stdout, /session: e2e-session/);
 
-  const sessionDir = join(homeDir, ".deepseek-cli", "sessions");
+  const sessionDir = join(homeDir, ".weiping-whale", "sessions");
   mkdirSync(sessionDir, { recursive: true });
   writeFileSync(join(sessionDir, "broken.json"), "{not-json", "utf8");
   const sessionsWithCorruptFile = run([], { input: "/sessions 20\n/exit\n" });

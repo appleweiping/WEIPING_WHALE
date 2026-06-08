@@ -53,7 +53,7 @@ for (const [name, target] of Object.entries(packageJson.bin ?? {})) {
   const normalizedTarget = target.replace(/\\/g, "/").replace(/^\.\//, "");
   if (!packFileSet.has(normalizedTarget)) failures.push(`pack-bin-target-missing: ${name} -> ${target}`);
 }
-if (packageJson.version !== "0.2.0") failures.push(`package-version-mismatch: ${packageJson.version}`);
+if (packageJson.version !== "0.3.0") failures.push(`package-version-mismatch: ${packageJson.version}`);
 
 const packagedConfig = readFileSync(join(root, "config.toml"), "utf-8");
 for (const pattern of [/D:[\\/]/i, /agent-resources/i, /ARIS/i, /Vipin/i, /agent hub/i]) {

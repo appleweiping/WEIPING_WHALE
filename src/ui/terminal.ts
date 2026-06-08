@@ -28,7 +28,7 @@ export function banner(runtime: RuntimeStatus, cwd: string, stats: BannerStats) 
   const w = Math.min(process.stdout.columns || 80, 60);
   const line = "─".repeat(w);
   console.log();
-  console.log(`  ${BLUE}${BOLD}DeepSeek CLI${RESET}  ${DIM}v${VERSION}${RESET}`);
+  console.log(`  ${BLUE}${BOLD}WEIPING_WHALE${RESET}  ${DIM}v${VERSION}${RESET}`);
   console.log(`  ${DIM}${line}${RESET}`);
   console.log(`  ${DIM}model${RESET}     ${GREEN}${runtime.model}${RESET}`);
   console.log(`  ${DIM}thinking${RESET}   ${YELLOW}${formatThinking(runtime)}${RESET}`);
@@ -897,7 +897,13 @@ function truncateDisplay(value: string, width: number): string {
 }
 
 export function printAssistant(text: string) {
-  console.log(`\n${BOLD}DeepSeek${RESET}\n${text}\n`);
+  console.log(`\n${BOLD}WEIPING_WHALE${RESET}\n${text}\n`);
+}
+
+/** A subtle one-line cost/cache footer. color tints just the chip. */
+export function printFooter(text: string, color?: "red" | "yellow" | "green" | "none") {
+  const tint = color === "red" ? RED : color === "yellow" ? YELLOW : color === "green" ? GREEN : DIM;
+  process.stderr.write(`${DIM}└ ${RESET}${tint}${text}${RESET}\n`);
 }
 
 export function printInfo(text: string) {
@@ -923,7 +929,7 @@ export function printToolEnd(name: string, elapsedMs: number, error?: boolean) {
 
 export function printHelp() {
   console.log(`
-${BOLD}DeepSeek CLI commands${RESET}
+${BOLD}WEIPING_WHALE commands${RESET}
   /help                Show this help
   /status              Show model, thinking, cwd, tools, safety, and MCP server counts
   /doctor              Run config, auth, safety, tool, and MCP diagnostics

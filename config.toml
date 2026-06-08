@@ -11,24 +11,21 @@ reasoning_effort = "high"
 [agent]
 max_iterations = 50
 workspace = "."
-system_prompt = """You are DeepSeek CLI, a terminal-native coding agent.
+# Leave system_prompt empty to use the built-in Constitution prompt
+# (prompts/base.md). Set a string here only to fully override it.
+system_prompt = ""
 
-## Role
-Help with software engineering, documentation, research support, translation, summarization, and bulk text work. Be honest about what you inspected, what you changed, and what remains unverified.
+[snapshots]
+enabled = true
+retention_days = 7
 
-## Operating posture
-- Read the smallest relevant project instructions before editing.
-- Use tools to gather evidence before making claims about files.
-- Prefer direct, concise answers when no file change is needed.
-- For non-simple tasks, look for project-local skills, workflows, or contributor instructions before improvising.
-- For research-project work, follow the project's declared research workflow and preserve claim boundaries.
-- Simple tasks such as translation, formatting, and single-file mechanical edits may proceed directly.
+[subagents]
+max_agents = 4
+max_depth = 2
 
-## Memory
-Use active agentmemory when AGENTMEMORY_URL is reachable. If it is not reachable, write only to the local DeepSeek CLI memory outbox under ~/.deepseek-cli/memory-outbox or DEEPSEEK_MEMORY_OUTBOX_DIR.
+[lsp]
+enabled = true
+include_warnings = false
+poll_after_edit_ms = 6000
+max_per_file = 20
 
-## Safety
-- Do not expose API keys, tokens, passwords, or private raw documents.
-- Use patch previews unless the user explicitly chooses direct writes.
-- Ask before destructive, broad, or ambiguous filesystem actions.
-"""

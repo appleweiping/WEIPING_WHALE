@@ -2,6 +2,7 @@
 import { EventEmitter } from "events";
 import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig, validateConfig, type Config } from "./config.js";
 import { Agent } from "./agent.js";
+import type { Usage } from "./llm/deepseek.js";
 import { MCPManager } from "./mcp/manager.js";
 import { getToolDefs } from "./tools/registry.js";
 import { formatPatchList, applyFilePatch, createFilePatch, rejectFilePatch } from "./safety/patches.js";
@@ -9,7 +10,10 @@ import { classifyShellCommand, getApprovalMode, listShellApprovals, rejectShellA
 import { getWriteMode, setWriteMode } from "./safety/patches.js";
 import { getSandboxMode, setSandboxMode } from "./safety/sandbox.js";
 import { runShellCommand } from "./tools/bash.js";
-import { createSessionId, formatSessionInfo, listSessions, loadSession, saveSession, sessionDir } from "./session.js";
+import { backtrackMessages, createSessionId, forkSession, formatSessionInfo, listSessions, loadSession, resolveSessionRef, saveSession, sessionDir } from "./session.js";
+import { writeHandoff } from "./prompts/assemble.js";
+import { discoverSkills } from "./skills/index.js";
+import { installSkill } from "./skills/install.js";
 import { memoryDiagnostics, saveSessionMemory, type SessionMemoryResult } from "./memory.js";
 import { VERSION } from "./runtime/version.js";
 import { endpointConfigured, endpointHost, safeErrorMessage } from "./runtime/safe-text.js";
@@ -20,6 +24,7 @@ import {
   createRL,
   printAssistant,
   printError,
+  printFooter,
   printHelp,
   printInfo,
   printRuntimeUpdated,
@@ -37,6 +42,16 @@ import "./tools/bash.js";
 import "./tools/file-read.js";
 import "./tools/file-write.js";
 import "./tools/glob.js";
+import "./tools/snapshot-tool.js";
+import "./tools/subagent.js";
+import { SnapshotManager } from "./snapshot/manager.js";
+import { setActiveSnapshotManager } from "./tools/snapshot-tool.js";
+import { SubAgentManager, setActiveSubAgentManager } from "./tools/subagent.js";
+import { LspManager } from "./lsp/manager.js";
+import { setActiveLspManager } from "./lsp/active.js";
+import { diagnosticsSuffix } from "./lsp/active.js";
+import { startRuntimeApi, type RuntimeApiHandle } from "./server/runtime-api.js";
+import { CostTracker } from "./cost.js";
 
 // ── Execution mode ────────────────────────────────────────────────────────────
 type ExecMode = "auto" | "plan" | "ask";
@@ -102,8 +117,18 @@ async function main() {
     process.exit(0);
   }
 
-  const resumeSessionId = readFlag(args, "--resume");
-  const sessionId = readFlag(args, "--session") ?? resumeSessionId ?? createSessionId();
+  const resumeFlag = readFlag(args, "--resume");
+  const wantLast = args.includes("--last");
+  // Resolve resume reference: --last, --resume <id|prefix|last>.
+  let resumeSessionId: string | undefined;
+  let resumeError: string | undefined;
+  if (wantLast || resumeFlag !== undefined) {
+    const ref = wantLast ? "last" : (resumeFlag || "last");
+    const resolved = resolveSessionRef(ref);
+    if (resolved.session) resumeSessionId = resolved.session.id;
+    else resumeError = resolved.error;
+  }
+  let sessionId = readFlag(args, "--session") ?? resumeSessionId ?? createSessionId();
   const task = readFlag(args, "-t") ?? readFlag(args, "--task") ?? readPositionalTask(args);
 
   const config = loadConfig();
@@ -115,8 +140,16 @@ async function main() {
       process.exit(1);
     }
   }
+  // "auto" is not a real model — it enables the Fin router. Strip it from the
+  // runtime overrides and turn on auto-routing instead.
+  let wantAutoRoute = false;
   try {
-    applyRuntimeOverrides(config, parseRuntimeArgs(args));
+    const runtimeArgs = parseRuntimeArgs(args);
+    if (runtimeArgs.model && runtimeArgs.model.trim().toLowerCase() === "auto") {
+      wantAutoRoute = true;
+      runtimeArgs.model = undefined;
+    }
+    applyRuntimeOverrides(config, runtimeArgs);
   } catch (err: any) {
     printCliError(safeErrorMessage(err), json);
     process.exit(1);
@@ -144,6 +177,11 @@ async function main() {
   }
 
   const agent = new Agent(config, mcpManager);
+  if (wantAutoRoute) agent.setAutoRoute(true);
+  if ((wantLast || resumeFlag !== undefined) && !resumeSessionId) {
+    printCliError(resumeError ?? "could not resolve session to resume", json);
+    process.exit(1);
+  }
   if (resumeSessionId) {
     const saved = loadSession(resumeSessionId);
     if (!saved) {
@@ -152,6 +190,39 @@ async function main() {
     }
     agent.restoreMessages(saved.messages);
   }
+
+  // Side-git snapshots: a separate repo under the state root that never touches
+  // the user's own .git. Disabled gracefully if git is missing or the workspace
+  // is too large. Controlled by config.snapshots.enabled (default true).
+  const snapshotManager = new SnapshotManager(process.cwd(), {
+    enabled: config.snapshots?.enabled ?? true,
+    retentionDays: config.snapshots?.retention_days,
+  });
+  setActiveSnapshotManager(snapshotManager);
+  if (!snapshotManager.isEnabled() && snapshotManager.reason() && !json) {
+    printInfo(`Snapshots disabled: ${snapshotManager.reason()}`);
+  }
+
+  // Bounded sub-agent pool: children are real Agent instances sharing config+MCP.
+  const subAgentManager = new SubAgentManager({
+    config,
+    mcpManager,
+    makeAgent: (cfg, mcp) => new Agent(cfg, mcp, { isSubagent: true }),
+    maxAgents: config.subagents?.max_agents ?? 4,
+    maxDepth: config.subagents?.max_depth ?? 2,
+    depth: 0,
+  });
+  setActiveSubAgentManager(subAgentManager);
+
+  // LSP post-edit diagnostics (TypeScript + Python). Best-effort; missing servers
+  // are silently skipped. Off in JSON/one-shot to avoid spawning servers needlessly.
+  const lspManager = new LspManager(process.cwd(), {
+    enabled: config.lsp?.enabled ?? true,
+    includeWarnings: config.lsp?.include_warnings,
+    pollAfterEditMs: config.lsp?.poll_after_edit_ms,
+    maxPerFile: config.lsp?.max_per_file,
+  });
+  setActiveLspManager(lspManager);
   const stats = () => ({
     toolCount: getToolDefs().length + mcpManager.getToolDefs().length,
     mcpServerCount: mcpManager.getServerCount(),
@@ -159,10 +230,13 @@ async function main() {
     sandboxMode: getSandboxMode(),
     writeMode: getWriteMode(),
   });
+  const costTracker = new CostTracker(config.pricing);
   const events = {
     onThinking: json ? undefined : printThinking,
     onToolStart: json ? undefined : printToolStart,
     onToolEnd: json ? undefined : printToolEnd,
+    onUsage: (model: string, usage: Usage) => costTracker.record(model, usage),
+    onRoute: json ? undefined : (decision: string) => printInfo(`route: ${decision}`),
   };
   const persistSnapshot = async (
     status: "closed" | "interrupted" | "error" | "manual" | "completed",
@@ -173,9 +247,28 @@ async function main() {
     return saveSessionMemory({ sessionId, cwd: process.cwd(), runtime: agent.getRuntime(), messages: agent.getMessages(), status, note, error });
   };
 
+  // Single serialization point for ALL agent turns (REPL input AND the HTTP API),
+  // so two turns never run concurrently on the shared message history.
+  let turnChain: Promise<unknown> = Promise.resolve();
+  const runAgentTurn = (message: string, note: string, images: ReturnType<typeof getPendingImages> = []): Promise<string> => {
+    const result = turnChain.then(async () => {
+      snapshotManager.beforeTurn();
+      const reply = await agent.run(message, events, images);
+      snapshotManager.afterTurn();
+      await persistSnapshot("completed", note);
+      return reply;
+    });
+    turnChain = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
   if (task) {
     try {
-      const reply = await agent.run(task, events);
+      snapshotManager.beforeTurn();
+      const taskImages = getPendingImages();
+      clearPendingImages();
+      const reply = await agent.run(task, events, taskImages);
+      snapshotManager.afterTurn();
       await persistSnapshot("completed", "single task completed");
       if (json) {
         console.log(JSON.stringify({ ok: true, session: sessionId, ...agent.getRuntime(), output: reply }, null, 2));
@@ -187,9 +280,11 @@ async function main() {
       await persistSnapshot("error", "single task failed; resume this session and retry after the network recovers", message);
       if (json) console.error(JSON.stringify({ ok: false, session: sessionId, error: { message } }, null, 2));
       else printCliError(message, false);
+      lspManager.dispose();
       mcpManager.disconnectAll();
       process.exit(1);
     }
+    lspManager.dispose();
     mcpManager.disconnectAll();
     process.exit(0);
   }
@@ -197,7 +292,43 @@ async function main() {
   banner(agent.getRuntime(), process.cwd(), stats());
   printInfo(formatSessionInfo(sessionId));
 
-  const commandContext: CommandContext = { agent, sessionId, stats, mcpManager, config, persistSnapshot };
+  // Optional local HTTP/SSE control surface (off unless --serve). Localhost-only
+  // by default; requires a bearer token (auto-generated and printed once).
+  let apiHandle: RuntimeApiHandle | undefined;
+  if (args.includes("--serve")) {
+    // Route API turns through the SAME turnChain as the REPL so they serialize.
+    const runTurn = (message: string): Promise<string> => runAgentTurn(message, "api turn completed");
+    try {
+      const host = readFlag(args, "--host");
+      const portStr = readFlag(args, "--port");
+      apiHandle = await startRuntimeApi(
+        { agent, costTracker, runTurn },
+        { host, port: portStr ? Number(portStr) : undefined, token: process.env.WEIPING_WHALE_API_TOKEN },
+      );
+      printInfo(`HTTP API listening on ${apiHandle.url}`);
+      printInfo(`API token: ${apiHandle.token}  (send as: Authorization: Bearer <token>)`);
+      if (host && host !== "127.0.0.1" && host !== "localhost") {
+        printError(`WARNING: API bound to ${host} (non-localhost). Anyone who can reach this host + token can drive the agent.`);
+      }
+    } catch (err: any) {
+      printError(`Failed to start HTTP API: ${safeErrorMessage(err)}`);
+    }
+  }
+
+  const commandContext: CommandContext = {
+    agent,
+    sessionId,
+    setSessionId: (id: string) => {
+      sessionId = id;
+      commandContext.sessionId = id;
+    },
+    stats,
+    mcpManager,
+    config,
+    snapshotManager,
+    costTracker,
+    persistSnapshot,
+  };
   const rl = createRL((context) => buildSlashMenu(context.line, context.cursor));
   rl.prompt();
   let lineQueue = Promise.resolve();
@@ -213,9 +344,11 @@ async function main() {
     }
 
     try {
-      const reply = await agent.run(line, events);
-      await persistSnapshot("completed", "assistant reply completed");
+      const turnImages = getPendingImages();
+      clearPendingImages();
+      const reply = await runAgentTurn(line, "assistant reply completed", turnImages);
       printAssistant(reply);
+      printFooter(costTracker.footer(), costTracker.cacheColor());
     } catch (err: any) {
       const message = safeErrorMessage(err);
       printError(`Error: ${message}`);
@@ -239,6 +372,8 @@ async function main() {
     try {
       await persistSnapshot(status, status === "interrupted" ? "SIGINT received" : "reader closed");
     } catch {}
+    if (apiHandle) await apiHandle.close().catch(() => {});
+    lspManager.dispose();
     mcpManager.disconnectAll();
     process.exit(0);
   }
@@ -538,9 +673,12 @@ async function runApprovedShellCommand(id: string): Promise<string> {
 interface CommandContext {
   agent: Agent;
   sessionId: string;
+  setSessionId: (id: string) => void;
   stats: () => ReturnType<typeof currentStats>;
   mcpManager: MCPManager;
   config: Config;
+  snapshotManager: SnapshotManager;
+  costTracker: CostTracker;
   persistSnapshot: (
     status: "closed" | "interrupted" | "error" | "manual" | "completed",
     note?: string,
@@ -565,6 +703,8 @@ const COMMAND_DEFS = [
   { name: "tools", args: "", description: "list built-in and MCP tools", submit: true },
   { name: "mcp", args: "<status|reconnect>", description: "inspect or reconnect MCP servers" },
   { name: "sessions", args: "[n]", description: "list recent saved sessions" },
+  { name: "fork", args: "", description: "fork the current session into a new branchable session", submit: true },
+  { name: "backtrack", args: "[n]", description: "rewind the conversation n user-turns back (default 1)" },
   { name: "memory", args: "<save|status>", description: "save current session summary to agentmemory" },
   { name: "retry", args: "", description: "retry the last user request after a network failure", submit: true },
   { name: "permissions", args: "<setting>", description: "permission model, approval, sandbox, and write-mode controls" },
@@ -573,10 +713,16 @@ const COMMAND_DEFS = [
   { name: "sandbox", args: "<mode>", description: "set file-write sandbox: workspace-write, read-only, unrestricted" },
   { name: "write-mode", args: "<mode>", description: "set file writes: preview or direct" },
   { name: "models", args: "", description: "list model presets and aliases", submit: true },
-  { name: "model", args: "<name>", description: "switch model preset or full model name" },
+  { name: "model", args: "<name>", description: "switch model preset, full model name, or 'auto' for per-turn routing" },
   { name: "thinking", args: "<mode>", description: "switch thinking: auto, on, off, high, max" },
   { name: "session", args: "", description: "save and show current session path", submit: true },
-  { name: "compact", args: "[n]", description: "summarize older context, keeping n recent messages" },
+  { name: "compact", args: "[fast]", description: "summarize older context (model summary; 'fast' = offline heuristic)" },
+  { name: "snapshots", args: "", description: "list workspace snapshots (side-git checkpoints)", submit: true },
+  { name: "cost", args: "", description: "show session token usage, cost, and cache-hit ratio", submit: true },
+  { name: "handoff", args: "[text]", description: "write a session relay to .weiping-whale/handoff.md (model-generated if no text)" },
+  { name: "skills", args: "<list|install>", description: "list discovered skills or install one from GitHub (owner/repo)" },
+  { name: "restore", args: "<id>", description: "restore workspace files to a snapshot id" },
+  { name: "undo", args: "", description: "undo the most recent workspace change via snapshots", submit: true },
   { name: "approvals", args: "", description: "list pending shell approvals", submit: true },
   { name: "approve", args: "<id>", description: "run a pending shell command" },
   { name: "deny", args: "<id>", description: "reject a pending shell command" },
@@ -584,8 +730,8 @@ const COMMAND_DEFS = [
   { name: "apply", args: "<id>", description: "apply a pending file patch" },
   { name: "reject", args: "<id>", description: "reject a pending file patch" },
   { name: "clear", args: "", description: "clear the terminal", submit: true },
-  { name: "exit", args: "", description: "quit DeepSeek CLI", submit: true },
-  { name: "quit", args: "", description: "quit DeepSeek CLI", submit: true },
+  { name: "exit", args: "", description: "quit WEIPING_WHALE", submit: true },
+  { name: "quit", args: "", description: "quit WEIPING_WHALE", submit: true },
   { name: "todo", args: "<add|done|start|remove|clear|list>", description: "manage persistent task list" },
   { name: "monitor", args: "<start|stop|logs|list>", description: "run and watch background processes" },
   { name: "mode", args: "<auto|plan|ask>", description: "set execution mode: auto (run freely), plan (think first), ask (confirm each edit)" },
@@ -717,11 +863,136 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
         console.log(formatSessionInfo(context.sessionId));
         return true;
+      case "fork": {
+        // Persist current state, then create a child sharing the LIVE history.
+        const parentId = context.sessionId;
+        const liveMessages = context.agent.getMessages();
+        saveSession(parentId, process.cwd(), context.agent.getRuntime(), liveMessages);
+        const childId = forkSession(parentId, process.cwd(), context.agent.getRuntime(), liveMessages);
+        if (!childId) {
+          printError("Cannot fork: current session has no messages yet.");
+          return true;
+        }
+        context.setSessionId(childId);
+        printInfo(`Forked into new session ${childId} (parent: ${parentId}). Continuing on the fork.`);
+        console.log(formatSessionInfo(childId));
+        return true;
+      }
+      case "backtrack": {
+        const steps = arg ? Math.max(1, Number(arg) || 1) : 1;
+        const rewound = backtrackMessages(context.agent.getMessages(), steps);
+        context.agent.restoreMessages(rewound);
+        saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
+        printInfo(`Rewound ${steps} user-turn(s); conversation now has ${rewound.length} message(s).`);
+        return true;
+      }
       case "compact": {
-        const keep = arg ? Number(arg) : 12;
-        const message = context.agent.compactContext(Number.isFinite(keep) ? keep : 12);
+        // `/compact` uses a model summary; `/compact fast` is the offline heuristic.
+        const fast = /^fast$/i.test(arg.trim());
+        const message = fast
+          ? context.agent.compactContext()
+          : await context.agent.compactWithSummary();
         saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
         console.log(message);
+        return true;
+      }
+      case "snapshots": {
+        if (!context.snapshotManager.isEnabled()) {
+          printInfo(`Snapshots disabled: ${context.snapshotManager.reason() ?? "unavailable"}`);
+          return true;
+        }
+        const snaps = context.snapshotManager.list(30);
+        if (snaps.length === 0) {
+          console.log("No snapshots yet. They are taken automatically around each turn.");
+          return true;
+        }
+        console.log(
+          snaps
+            .map((s) => {
+              const when = new Date(s.timestamp * 1000).toISOString().replace("T", " ").slice(0, 19);
+              return `${s.id.slice(0, 12)}  ${when}  ${s.label}`;
+            })
+            .join("\n"),
+        );
+        return true;
+      }
+      case "restore": {
+        if (!arg) {
+          printError("Usage: /restore <snapshot-id>  (see /snapshots)");
+          return true;
+        }
+        const result = context.snapshotManager.restore(arg);
+        if (result.ok) printInfo(`Restored workspace to snapshot ${result.restored?.slice(0, 12)}.`);
+        else printError(`Restore failed: ${result.error}`);
+        return true;
+      }
+      case "undo": {
+        const result = context.snapshotManager.undo();
+        if (result.ok) printInfo(`Undid last change; restored snapshot ${result.restored?.slice(0, 12)}.`);
+        else printError(`Undo failed: ${result.error}`);
+        return true;
+      }
+      case "cost": {
+        const s = context.costTracker.snapshot();
+        const ratio = context.costTracker.cacheHitRatio();
+        console.log(
+          [
+            `cost_usd: $${s.costUsd.toFixed(4)}`,
+            `turns: ${s.turns}`,
+            `prompt_tokens: ${s.promptTokens}`,
+            `completion_tokens: ${s.completionTokens}`,
+            `cache_hit_tokens: ${s.cacheHitTokens}`,
+            `cache_miss_tokens: ${s.cacheMissTokens}`,
+            `cache_hit_ratio: ${ratio == null ? "n/a" : `${Math.round(ratio * 100)}%`}`,
+          ].join("\n"),
+        );
+        return true;
+      }
+      case "handoff": {
+        let content: string;
+        if (arg.trim()) {
+          content = arg.trim();
+        } else {
+          printInfo("Generating session handoff relay...");
+          try {
+            content = await context.agent.generateHandoff();
+          } catch (err: any) {
+            printError(`Handoff generation failed: ${safeErrorMessage(err)}`);
+            return true;
+          }
+        }
+        const path = writeHandoff(process.cwd(), content);
+        printInfo(`Wrote handoff relay to ${path}`);
+        return true;
+      }
+      case "skills": {
+        const [sub, ...rest] = arg.split(/\s+/);
+        const subArg = rest.join(" ").trim();
+        if (!sub || sub === "list") {
+          const found = discoverSkills(process.cwd());
+          if (found.length === 0) {
+            console.log("No skills found. Install one with /skills install owner/repo.");
+          } else {
+            console.log(found.map((s) => `${s.name} [${s.source}]${s.description ? ` — ${s.description}` : ""}\n  ${s.path}`).join("\n"));
+          }
+          return true;
+        }
+        if (sub === "install") {
+          // Optional trailing "force" to overwrite an existing skill.
+          const tokens = subArg.split(/\s+/);
+          const force = tokens.includes("force") || tokens.includes("--force");
+          const source = tokens.filter((t) => t !== "force" && t !== "--force").join(" ").trim();
+          if (!source) {
+            printError("Usage: /skills install <owner/repo | github url> [force]");
+            return true;
+          }
+          printInfo(`Installing skill from ${source}...`);
+          const result = installSkill(source, { force });
+          if (result.ok) printInfo(`Installed skill '${result.name}' to ${result.path}. Restart to load it into the prompt.`);
+          else printError(`Install failed: ${result.error}`);
+          return true;
+        }
+        printError("Usage: /skills <list|install owner/repo [force]>");
         return true;
       }
       case "approvals": {
@@ -749,6 +1020,10 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         else {
           const result = applyFilePatch(arg);
           console.log(result.message);
+          if (result.ok && result.patch) {
+            const suffix = await diagnosticsSuffix(result.patch.path);
+            if (suffix.trim()) console.log(suffix.trim());
+          }
         }
         return true;
       }
@@ -757,8 +1032,12 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         else console.log(rejectFilePatch(arg) ? `Rejected patch ${arg}` : `No pending patch: ${arg}`);
         return true;
       case "model":
-        if (!arg) printError("Usage: /model <pro|flash|chat|reasoner|model-name>");
-        else {
+        if (!arg) printError("Usage: /model <auto|pro|flash|chat|reasoner|model-name>");
+        else if (arg.trim().toLowerCase() === "auto") {
+          context.agent.setAutoRoute(true);
+          printInfo("Auto routing enabled (Fin): model + thinking chosen per turn.");
+        } else {
+          context.agent.setAutoRoute(false);
           context.agent.setModel(arg);
           printRuntimeUpdated(context.agent.getRuntime());
         }
@@ -918,7 +1197,15 @@ function printSessions(limit: number) {
     console.log("No saved sessions.");
     return;
   }
-  console.log(sessions.map((session) => `${session.id} updated=${session.updated_at} messages=${session.messages.length} cwd=${session.cwd}`).join("\n"));
+  console.log(
+    sessions
+      .map((session) => {
+        const title = session.title ? ` "${session.title}"` : "";
+        const fork = session.parent_session_id ? ` fork<-${session.parent_session_id.slice(0, 16)}` : "";
+        return `${session.id}${title} updated=${session.updated_at} messages=${session.messages.length}${fork} cwd=${session.cwd}`;
+      })
+      .join("\n"),
+  );
 }
 
 function printMemoryResult(result: SessionMemoryResult) {
@@ -1182,7 +1469,7 @@ function readFlag(args: string[], name: string): string | undefined {
 }
 
 function readPositionalTask(args: string[]): string | null {
-  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace", "--session", "--resume"]);
+  const valueFlags = new Set(["-t", "--task", "-m", "--model", "--thinking", "--reasoning-effort", "--cwd", "--workspace", "--session", "--resume", "--port", "--host"]);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (valueFlags.has(arg)) {

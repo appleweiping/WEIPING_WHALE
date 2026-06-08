@@ -3,6 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Message } from "./llm/deepseek.js";
 import { compact, redactSecrets, safeErrorMessage } from "./runtime/safe-text.js";
+import { memoryOutboxDir as resolveMemoryOutboxDir } from "./runtime/paths.js";
 
 export interface SessionMemorySnapshot {
   sessionId: string;
@@ -88,7 +89,7 @@ function writeMemoryOutbox(snapshot: SessionMemorySnapshot, content: string): st
 }
 
 export function memoryOutboxDir(): string {
-  return process.env.DEEPSEEK_MEMORY_OUTBOX_DIR || join(homedir(), ".deepseek-cli", "memory-outbox");
+  return resolveMemoryOutboxDir();
 }
 
 export function memoryDiagnostics() {
@@ -126,7 +127,11 @@ function lastMessage(messages: Message[], role: Message["role"]): string | null 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== role || !message.content) continue;
-    return compact(redactSecrets(message.content), 1200);
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((b) => (b.type === "text" ? b.text : "[image]")).join(" ");
+    return compact(redactSecrets(text), 1200);
   }
   return null;
 }

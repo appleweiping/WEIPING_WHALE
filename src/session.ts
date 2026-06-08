@@ -78,20 +78,24 @@ export function saveSession(
 
 /**
  * Fork the given session into a new branchable session that shares history up
- * to the fork point. Returns the new session id, or null if the source is
- * missing/empty.
+ * to the fork point. The caller passes the LIVE in-memory messages so we never
+ * overwrite the parent with stale disk state. Returns the new session id, or
+ * null if there is nothing to fork.
  */
-export function forkSession(sourceId: string, cwd: string, runtime: Record<string, string>): string | null {
+export function forkSession(
+  sourceId: string,
+  cwd: string,
+  runtime: Record<string, string>,
+  liveMessages: Message[],
+): string | null {
+  if (!liveMessages || liveMessages.length === 0) return null;
   const source = loadSession(sourceId);
-  if (!source || source.messages.length === 0) return null;
-  // Persist the parent first so its metadata is up to date.
-  saveSession(sourceId, source.cwd ?? cwd, source.runtime ?? runtime, source.messages);
-  const childId = createSessionId() + "-fork";
-  saveSession(childId, cwd, runtime, [...source.messages], {
+  const childId = createSessionId() + "-fork-" + Math.random().toString(36).slice(2, 8);
+  saveSession(childId, cwd, runtime, [...liveMessages], {
     parent_session_id: sourceId,
-    forked_from_message_count: source.messages.length,
-    total_tokens: source.total_tokens,
-    cost: source.cost,
+    forked_from_message_count: liveMessages.length,
+    total_tokens: source?.total_tokens,
+    cost: source?.cost,
   });
   return childId;
 }

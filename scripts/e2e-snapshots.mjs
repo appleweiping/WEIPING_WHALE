@@ -57,6 +57,41 @@ try {
   // Verify the side repo lives under the temp state root, NOT in the workspace.
   assert.equal(existsSync(join(ws, ".git")), false, "workspace .git must NOT be created");
 
+  // Safety: a file outside the workspace, reachable only via a symlinked parent,
+  // must NEVER be deleted by restore's cleanup. Build:
+  //   <outside>/secret.txt   (must survive)
+  //   <ws>/linkdir -> <outside>
+  // Snapshot with linkdir/secret.txt "tracked", then restore to an earlier snap.
+  const outside = mkdtempSync(join(tmpdir(), "ww-snap-outside-"));
+  const secret = join(outside, "secret.txt");
+  writeFileSync(secret, "DO NOT DELETE\n", "utf-8");
+  try {
+    // Take a clean baseline snapshot first.
+    mgr.beforeTurn();
+    writeFileSync(fileA, "baseline\n", "utf-8");
+    const baseSha = mgr.afterTurn();
+
+    // Now introduce a symlinked dir pointing outside and snapshot it.
+    let symlinkSupported = true;
+    try {
+      const { symlinkSync } = await import("node:fs");
+      symlinkSync(outside, join(ws, "linkdir"), "junction");
+    } catch {
+      symlinkSupported = false;
+    }
+    if (symlinkSupported && baseSha) {
+      mgr.beforeTurn();
+      mgr.afterTurn();
+      // Restore back to baseline (which did not contain linkdir/*): cleanup runs.
+      mgr.restore(baseSha);
+      // The external secret must still exist.
+      assert.equal(existsSync(secret), true, "restore must NOT delete files outside the workspace via symlink");
+      assert.equal(readFileSync(secret, "utf-8"), "DO NOT DELETE\n", "external file content preserved");
+    }
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+
   console.log("snapshot e2e ok");
 } finally {
   rmSync(ws, { recursive: true, force: true });

@@ -178,8 +178,40 @@ export class Agent {
       startPinned = 1;
     }
     out.push({ role: "system", content: summaryContent });
+
+    // First pass: which tool_call ids have BOTH a pinned assistant call and a
+    // pinned tool result? Only those pairs survive intact.
+    const pinnedCallIds = new Set<string>();
+    const pinnedResultIds = new Set<string>();
     for (let i = startPinned; i < this.messages.length; i++) {
-      if (pinnedSet.has(i)) out.push(this.messages[i]);
+      if (!pinnedSet.has(i)) continue;
+      const m = this.messages[i];
+      if (m.tool_calls?.length) for (const tc of m.tool_calls) pinnedCallIds.add(tc.id);
+      if (m.role === "tool" && m.tool_call_id) pinnedResultIds.add(m.tool_call_id);
+    }
+
+    for (let i = startPinned; i < this.messages.length; i++) {
+      if (!pinnedSet.has(i)) continue;
+      const m = this.messages[i];
+
+      // Drop an orphan tool result whose assistant call won't be kept — a tool
+      // message with no preceding call is rejected by the provider.
+      if (m.role === "tool") {
+        if (!m.tool_call_id || !pinnedCallIds.has(m.tool_call_id)) continue;
+        out.push(m);
+        continue;
+      }
+
+      // Strip dangling tool_calls whose result is not kept, so the provider never
+      // sees an assistant tool_calls message without its matching result.
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        const live = m.tool_calls.filter((tc) => pinnedResultIds.has(tc.id));
+        if (live.length !== m.tool_calls.length) {
+          out.push({ ...m, tool_calls: live.length ? live : undefined });
+          continue;
+        }
+      }
+      out.push(m);
     }
     return out;
   }

@@ -37,7 +37,7 @@ try {
   assert.equal(last.session?.id, baseId, "last resolves to most recent");
 
   // Fork: child shares history + records parent linkage.
-  const childId = s.forkSession(baseId, cwd, runtime);
+  const childId = s.forkSession(baseId, cwd, runtime, msgs);
   assert.ok(childId, "fork should produce a child id");
   const child = s.loadSession(childId);
   assert.equal(child.parent_session_id, baseId, "child records parent");

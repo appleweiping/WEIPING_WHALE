@@ -39,6 +39,24 @@ const s2 = t2.snapshot();
 assert.equal(s2.cacheMissTokens, 1_000_000, "no-cache-fields -> all miss");
 assert.equal(s2.cacheHitTokens, 0);
 
+// Only HIT reported -> derive miss = prompt - hit.
+const tHit = new CostTracker();
+tHit.record("deepseek-v4-flash", { prompt_tokens: 1000, completion_tokens: 0, prompt_cache_hit_tokens: 700 });
+assert.equal(tHit.snapshot().cacheMissTokens, 300, "derive miss from prompt-hit");
+
+// Only MISS reported -> derive hit = prompt - miss (must NOT drop hits to zero).
+const tMiss = new CostTracker();
+tMiss.record("deepseek-v4-flash", { prompt_tokens: 1000, completion_tokens: 0, prompt_cache_miss_tokens: 200 });
+assert.equal(tMiss.snapshot().cacheHitTokens, 800, "derive hit from prompt-miss");
+
+// Negative / NaN usage is clamped.
+const tBad = new CostTracker();
+tBad.record("deepseek-v4-flash", { prompt_tokens: -5, completion_tokens: NaN, prompt_cache_hit_tokens: -1, prompt_cache_miss_tokens: -2 });
+const sBad = tBad.snapshot();
+assert.equal(sBad.promptTokens, 0, "negative prompt clamped");
+assert.equal(sBad.completionTokens, 0, "NaN completion clamped");
+assert.equal(sBad.costUsd, 0, "no cost from clamped-zero usage");
+
 // Footer format sanity.
 assert.match(t.footer(), /\$\d+\.\d{4} · .* tok · cache \d+%/, `footer format: ${t.footer()}`);
 

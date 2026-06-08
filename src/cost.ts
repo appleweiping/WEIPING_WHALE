@@ -58,15 +58,24 @@ export class CostTracker {
   /** Record a single completion's usage against a model. */
   record(model: string, usage: Usage): void {
     const price = this.priceFor(model);
-    const prompt = usage.prompt_tokens || 0;
-    const completion = usage.completion_tokens || 0;
+    const prompt = clampInt(usage.prompt_tokens);
+    const completion = clampInt(usage.completion_tokens);
 
-    // Derive hit/miss. If the provider didn't report them, treat all as miss.
-    let hit = usage.prompt_cache_hit_tokens ?? 0;
-    let miss = usage.prompt_cache_miss_tokens ?? (prompt - hit);
-    if (miss < 0) miss = 0;
-    // If neither reported, attribute everything to miss.
-    if (usage.prompt_cache_hit_tokens == null && usage.prompt_cache_miss_tokens == null) {
+    const hasHit = usage.prompt_cache_hit_tokens != null;
+    const hasMiss = usage.prompt_cache_miss_tokens != null;
+    let hit: number;
+    let miss: number;
+    if (hasHit && hasMiss) {
+      hit = clampInt(usage.prompt_cache_hit_tokens);
+      miss = clampInt(usage.prompt_cache_miss_tokens);
+    } else if (hasHit) {
+      hit = clampInt(usage.prompt_cache_hit_tokens);
+      miss = Math.max(0, prompt - hit); // derive the missing side from prompt
+    } else if (hasMiss) {
+      miss = clampInt(usage.prompt_cache_miss_tokens);
+      hit = Math.max(0, prompt - miss); // derive hits, don't drop them to zero
+    } else {
+      // Neither reported: attribute everything to miss (conservative, higher cost).
       hit = 0;
       miss = prompt;
     }
@@ -117,4 +126,11 @@ function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** Coerce a usage figure to a finite, non-negative integer. */
+function clampInt(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
 }

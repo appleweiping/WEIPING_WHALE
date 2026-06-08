@@ -781,10 +781,11 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         console.log(formatSessionInfo(context.sessionId));
         return true;
       case "fork": {
-        // Persist current state, then create a child sharing the history.
+        // Persist current state, then create a child sharing the LIVE history.
         const parentId = context.sessionId;
-        saveSession(parentId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
-        const childId = forkSession(parentId, process.cwd(), context.agent.getRuntime());
+        const liveMessages = context.agent.getMessages();
+        saveSession(parentId, process.cwd(), context.agent.getRuntime(), liveMessages);
+        const childId = forkSession(parentId, process.cwd(), context.agent.getRuntime(), liveMessages);
         if (!childId) {
           printError("Cannot fork: current session has no messages yet.");
           return true;

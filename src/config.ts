@@ -35,6 +35,10 @@ export interface Config {
     retention_days?: number;
   };
   pricing?: Record<string, { cache_hit_usd?: number; cache_miss_usd?: number; output_usd?: number }>;
+  subagents?: {
+    max_agents?: number;
+    max_depth?: number;
+  };
   mcp_servers: Record<string, MCPServerConfig>;
 }
 
@@ -139,6 +143,10 @@ const DEFAULT_CONFIG: Config = {
   snapshots: {
     enabled: true,
     retention_days: 7,
+  },
+  subagents: {
+    max_agents: 4,
+    max_depth: 2,
   },
   mcp_servers: {},
 };

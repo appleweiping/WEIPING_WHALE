@@ -11,6 +11,8 @@ import {
   discoverProjectInstructions,
   readHandoff,
 } from "./prompts/assemble.js";
+import { route } from "./router.js";
+import { discoverSkills, renderSkillsBlock } from "./skills/index.js";
 import { getToolDefs, getTool, registerTool } from "./tools/registry.js";
 import { MCPManager } from "./mcp/manager.js";
 import {
@@ -27,6 +29,8 @@ export class Agent {
   private config: Config;
   private messages: Message[] = [];
   private maxIterations: number;
+  private autoRoute = false;
+  private lastRoute?: string;
 
   constructor(config: Config, mcpManager: MCPManager) {
     this.config = config;
@@ -42,6 +46,7 @@ export class Agent {
       : assembleSystemPrompt({
           runtimeGuidance: RUNTIME_SWITCHING_PROMPT,
           projectInstructions: discoverProjectInstructions(workspace),
+          skills: renderSkillsBlock(discoverSkills(workspace)),
           handoff: readHandoff(workspace),
         });
     this.messages.push({ role: "system", content: systemPrompt });
@@ -216,8 +221,26 @@ export class Agent {
     return out;
   }
 
+  /** Enable/disable per-turn auto routing of model + thinking effort. */
+  setAutoRoute(on: boolean): void {
+    this.autoRoute = on;
+  }
+  isAutoRoute(): boolean {
+    return this.autoRoute;
+  }
+  lastRouteReason(): string | undefined {
+    return this.lastRoute;
+  }
+
   async run(userMessage: string, events: AgentEvents = {}): Promise<string> {
     this.messages.push({ role: "user", content: userMessage });
+    if (this.autoRoute) {
+      const decision = route({ lastUserMessage: userMessage });
+      this.setModel(decision.model);
+      this.setThinking(decision.thinking === "enabled" ? "enabled" : "disabled", decision.reasoning_effort);
+      this.lastRoute = `${decision.effort} (${decision.model}/${decision.thinking}; ${decision.reason})`;
+      events.onRoute?.(this.lastRoute);
+    }
     return this.complete(events);
   }
 
@@ -367,4 +390,5 @@ export interface AgentEvents {
   onToolStart?: (name: string, args: Record<string, any>) => void;
   onToolEnd?: (name: string, elapsedMs: number, error: boolean) => void;
   onUsage?: (model: string, usage: Usage) => void;
+  onRoute?: (decision: string) => void;
 }

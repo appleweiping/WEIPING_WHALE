@@ -12,6 +12,8 @@ import { getSandboxMode, setSandboxMode } from "./safety/sandbox.js";
 import { runShellCommand } from "./tools/bash.js";
 import { backtrackMessages, createSessionId, forkSession, formatSessionInfo, listSessions, loadSession, resolveSessionRef, saveSession, sessionDir } from "./session.js";
 import { writeHandoff } from "./prompts/assemble.js";
+import { discoverSkills } from "./skills/index.js";
+import { installSkill } from "./skills/install.js";
 import { memoryDiagnostics, saveSessionMemory, type SessionMemoryResult } from "./memory.js";
 import { VERSION } from "./runtime/version.js";
 import { endpointConfigured, endpointHost, safeErrorMessage } from "./runtime/safe-text.js";
@@ -41,8 +43,10 @@ import "./tools/file-read.js";
 import "./tools/file-write.js";
 import "./tools/glob.js";
 import "./tools/snapshot-tool.js";
+import "./tools/subagent.js";
 import { SnapshotManager } from "./snapshot/manager.js";
 import { setActiveSnapshotManager } from "./tools/snapshot-tool.js";
+import { SubAgentManager, setActiveSubAgentManager } from "./tools/subagent.js";
 import { CostTracker } from "./cost.js";
 
 // ── Execution mode ────────────────────────────────────────────────────────────
@@ -132,8 +136,16 @@ async function main() {
       process.exit(1);
     }
   }
+  // "auto" is not a real model — it enables the Fin router. Strip it from the
+  // runtime overrides and turn on auto-routing instead.
+  let wantAutoRoute = false;
   try {
-    applyRuntimeOverrides(config, parseRuntimeArgs(args));
+    const runtimeArgs = parseRuntimeArgs(args);
+    if (runtimeArgs.model && runtimeArgs.model.trim().toLowerCase() === "auto") {
+      wantAutoRoute = true;
+      runtimeArgs.model = undefined;
+    }
+    applyRuntimeOverrides(config, runtimeArgs);
   } catch (err: any) {
     printCliError(safeErrorMessage(err), json);
     process.exit(1);
@@ -161,6 +173,7 @@ async function main() {
   }
 
   const agent = new Agent(config, mcpManager);
+  if (wantAutoRoute) agent.setAutoRoute(true);
   if ((wantLast || resumeFlag !== undefined) && !resumeSessionId) {
     printCliError(resumeError ?? "could not resolve session to resume", json);
     process.exit(1);
@@ -185,6 +198,17 @@ async function main() {
   if (!snapshotManager.isEnabled() && snapshotManager.reason() && !json) {
     printInfo(`Snapshots disabled: ${snapshotManager.reason()}`);
   }
+
+  // Bounded sub-agent pool: children are real Agent instances sharing config+MCP.
+  const subAgentManager = new SubAgentManager({
+    config,
+    mcpManager,
+    makeAgent: (cfg, mcp) => new Agent(cfg, mcp),
+    maxAgents: config.subagents?.max_agents ?? 4,
+    maxDepth: config.subagents?.max_depth ?? 2,
+    depth: 0,
+  });
+  setActiveSubAgentManager(subAgentManager);
   const stats = () => ({
     toolCount: getToolDefs().length + mcpManager.getToolDefs().length,
     mcpServerCount: mcpManager.getServerCount(),
@@ -198,6 +222,7 @@ async function main() {
     onToolStart: json ? undefined : printToolStart,
     onToolEnd: json ? undefined : printToolEnd,
     onUsage: (model: string, usage: Usage) => costTracker.record(model, usage),
+    onRoute: json ? undefined : (decision: string) => printInfo(`route: ${decision}`),
   };
   const persistSnapshot = async (
     status: "closed" | "interrupted" | "error" | "manual" | "completed",
@@ -631,13 +656,14 @@ const COMMAND_DEFS = [
   { name: "sandbox", args: "<mode>", description: "set file-write sandbox: workspace-write, read-only, unrestricted" },
   { name: "write-mode", args: "<mode>", description: "set file writes: preview or direct" },
   { name: "models", args: "", description: "list model presets and aliases", submit: true },
-  { name: "model", args: "<name>", description: "switch model preset or full model name" },
+  { name: "model", args: "<name>", description: "switch model preset, full model name, or 'auto' for per-turn routing" },
   { name: "thinking", args: "<mode>", description: "switch thinking: auto, on, off, high, max" },
   { name: "session", args: "", description: "save and show current session path", submit: true },
   { name: "compact", args: "[fast]", description: "summarize older context (model summary; 'fast' = offline heuristic)" },
   { name: "snapshots", args: "", description: "list workspace snapshots (side-git checkpoints)", submit: true },
   { name: "cost", args: "", description: "show session token usage, cost, and cache-hit ratio", submit: true },
   { name: "handoff", args: "[text]", description: "write a session relay to .weiping-whale/handoff.md (model-generated if no text)" },
+  { name: "skills", args: "<list|install>", description: "list discovered skills or install one from GitHub (owner/repo)" },
   { name: "restore", args: "<id>", description: "restore workspace files to a snapshot id" },
   { name: "undo", args: "", description: "undo the most recent workspace change via snapshots", submit: true },
   { name: "approvals", args: "", description: "list pending shell approvals", submit: true },
@@ -882,6 +908,32 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         printInfo(`Wrote handoff relay to ${path}`);
         return true;
       }
+      case "skills": {
+        const [sub, ...rest] = arg.split(/\s+/);
+        const subArg = rest.join(" ").trim();
+        if (!sub || sub === "list") {
+          const found = discoverSkills(process.cwd());
+          if (found.length === 0) {
+            console.log("No skills found. Install one with /skills install owner/repo.");
+          } else {
+            console.log(found.map((s) => `${s.name} [${s.source}]${s.description ? ` — ${s.description}` : ""}\n  ${s.path}`).join("\n"));
+          }
+          return true;
+        }
+        if (sub === "install") {
+          if (!subArg) {
+            printError("Usage: /skills install <owner/repo | github url>");
+            return true;
+          }
+          printInfo(`Installing skill from ${subArg}...`);
+          const result = installSkill(subArg);
+          if (result.ok) printInfo(`Installed skill '${result.name}' to ${result.path}. Restart to load it into the prompt.`);
+          else printError(`Install failed: ${result.error}`);
+          return true;
+        }
+        printError("Usage: /skills <list|install owner/repo>");
+        return true;
+      }
       case "approvals": {
         const approvals = listShellApprovals();
         console.log(approvals.length ? approvals.map((item) => `${item.id} ${item.reason}\n${item.command}`).join("\n\n") : "No pending shell approvals.");
@@ -915,8 +967,12 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         else console.log(rejectFilePatch(arg) ? `Rejected patch ${arg}` : `No pending patch: ${arg}`);
         return true;
       case "model":
-        if (!arg) printError("Usage: /model <pro|flash|chat|reasoner|model-name>");
-        else {
+        if (!arg) printError("Usage: /model <auto|pro|flash|chat|reasoner|model-name>");
+        else if (arg.trim().toLowerCase() === "auto") {
+          context.agent.setAutoRoute(true);
+          printInfo("Auto routing enabled (Fin): model + thinking chosen per turn.");
+        } else {
+          context.agent.setAutoRoute(false);
           context.agent.setModel(arg);
           printRuntimeUpdated(context.agent.getRuntime());
         }

@@ -48,6 +48,7 @@ function constitutionCandidates(): string[] {
 export interface PromptZones {
   runtimeGuidance?: string;
   projectInstructions?: { source: string; content: string }[];
+  skills?: string;
   memory?: string;
   handoff?: string;
   modeSuffix?: string;
@@ -64,6 +65,11 @@ export function assembleSystemPrompt(zones: PromptZones): string {
   for (const inst of zones.projectInstructions ?? []) {
     const body = inst.content.slice(0, 100_000); // guard against pathological files
     parts.push(`<instructions source="${escapeAttr(inst.source)}">\n${body}\n</instructions>`);
+  }
+
+  // Skills catalog (workspace-static): progressive disclosure, before memory.
+  if (zones.skills?.trim()) {
+    parts.push(zones.skills.trim());
   }
 
   if (zones.memory?.trim()) {

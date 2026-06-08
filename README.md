@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="https://raw.githubusercontent.com/appleweiping/WEIPING_WHALE/master/assets/banner.png" alt="WEIPING_WHALE" width="720" />
+</p>
+
+<p align="center">
   <strong>WEIPING_WHALE — a terminal-native DeepSeek coding agent.</strong>
 </p>
 

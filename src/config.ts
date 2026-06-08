@@ -30,6 +30,10 @@ export interface Config {
     workspace: string;
     system_prompt: string;
   };
+  snapshots?: {
+    enabled?: boolean;
+    retention_days?: number;
+  };
   mcp_servers: Record<string, MCPServerConfig>;
 }
 
@@ -130,6 +134,10 @@ const DEFAULT_CONFIG: Config = {
     max_iterations: 50,
     workspace: ".",
     system_prompt: "",
+  },
+  snapshots: {
+    enabled: true,
+    retention_days: 7,
   },
   mcp_servers: {},
 };

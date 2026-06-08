@@ -37,6 +37,9 @@ import "./tools/bash.js";
 import "./tools/file-read.js";
 import "./tools/file-write.js";
 import "./tools/glob.js";
+import "./tools/snapshot-tool.js";
+import { SnapshotManager } from "./snapshot/manager.js";
+import { setActiveSnapshotManager } from "./tools/snapshot-tool.js";
 
 // ── Execution mode ────────────────────────────────────────────────────────────
 type ExecMode = "auto" | "plan" | "ask";
@@ -152,6 +155,18 @@ async function main() {
     }
     agent.restoreMessages(saved.messages);
   }
+
+  // Side-git snapshots: a separate repo under the state root that never touches
+  // the user's own .git. Disabled gracefully if git is missing or the workspace
+  // is too large. Controlled by config.snapshots.enabled (default true).
+  const snapshotManager = new SnapshotManager(process.cwd(), {
+    enabled: config.snapshots?.enabled ?? true,
+    retentionDays: config.snapshots?.retention_days,
+  });
+  setActiveSnapshotManager(snapshotManager);
+  if (!snapshotManager.isEnabled() && snapshotManager.reason() && !json) {
+    printInfo(`Snapshots disabled: ${snapshotManager.reason()}`);
+  }
   const stats = () => ({
     toolCount: getToolDefs().length + mcpManager.getToolDefs().length,
     mcpServerCount: mcpManager.getServerCount(),
@@ -175,7 +190,9 @@ async function main() {
 
   if (task) {
     try {
+      snapshotManager.beforeTurn();
       const reply = await agent.run(task, events);
+      snapshotManager.afterTurn();
       await persistSnapshot("completed", "single task completed");
       if (json) {
         console.log(JSON.stringify({ ok: true, session: sessionId, ...agent.getRuntime(), output: reply }, null, 2));
@@ -197,7 +214,7 @@ async function main() {
   banner(agent.getRuntime(), process.cwd(), stats());
   printInfo(formatSessionInfo(sessionId));
 
-  const commandContext: CommandContext = { agent, sessionId, stats, mcpManager, config, persistSnapshot };
+  const commandContext: CommandContext = { agent, sessionId, stats, mcpManager, config, snapshotManager, persistSnapshot };
   const rl = createRL((context) => buildSlashMenu(context.line, context.cursor));
   rl.prompt();
   let lineQueue = Promise.resolve();
@@ -213,7 +230,9 @@ async function main() {
     }
 
     try {
+      snapshotManager.beforeTurn();
       const reply = await agent.run(line, events);
+      snapshotManager.afterTurn();
       await persistSnapshot("completed", "assistant reply completed");
       printAssistant(reply);
     } catch (err: any) {
@@ -541,6 +560,7 @@ interface CommandContext {
   stats: () => ReturnType<typeof currentStats>;
   mcpManager: MCPManager;
   config: Config;
+  snapshotManager: SnapshotManager;
   persistSnapshot: (
     status: "closed" | "interrupted" | "error" | "manual" | "completed",
     note?: string,
@@ -577,6 +597,9 @@ const COMMAND_DEFS = [
   { name: "thinking", args: "<mode>", description: "switch thinking: auto, on, off, high, max" },
   { name: "session", args: "", description: "save and show current session path", submit: true },
   { name: "compact", args: "[n]", description: "summarize older context, keeping n recent messages" },
+  { name: "snapshots", args: "", description: "list workspace snapshots (side-git checkpoints)", submit: true },
+  { name: "restore", args: "<id>", description: "restore workspace files to a snapshot id" },
+  { name: "undo", args: "", description: "undo the most recent workspace change via snapshots", submit: true },
   { name: "approvals", args: "", description: "list pending shell approvals", submit: true },
   { name: "approve", args: "<id>", description: "run a pending shell command" },
   { name: "deny", args: "<id>", description: "reject a pending shell command" },
@@ -722,6 +745,42 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         const message = context.agent.compactContext(Number.isFinite(keep) ? keep : 12);
         saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
         console.log(message);
+        return true;
+      }
+      case "snapshots": {
+        if (!context.snapshotManager.isEnabled()) {
+          printInfo(`Snapshots disabled: ${context.snapshotManager.reason() ?? "unavailable"}`);
+          return true;
+        }
+        const snaps = context.snapshotManager.list(30);
+        if (snaps.length === 0) {
+          console.log("No snapshots yet. They are taken automatically around each turn.");
+          return true;
+        }
+        console.log(
+          snaps
+            .map((s) => {
+              const when = new Date(s.timestamp * 1000).toISOString().replace("T", " ").slice(0, 19);
+              return `${s.id.slice(0, 12)}  ${when}  ${s.label}`;
+            })
+            .join("\n"),
+        );
+        return true;
+      }
+      case "restore": {
+        if (!arg) {
+          printError("Usage: /restore <snapshot-id>  (see /snapshots)");
+          return true;
+        }
+        const result = context.snapshotManager.restore(arg);
+        if (result.ok) printInfo(`Restored workspace to snapshot ${result.restored?.slice(0, 12)}.`);
+        else printError(`Restore failed: ${result.error}`);
+        return true;
+      }
+      case "undo": {
+        const result = context.snapshotManager.undo();
+        if (result.ok) printInfo(`Undid last change; restored snapshot ${result.restored?.slice(0, 12)}.`);
+        else printError(`Undo failed: ${result.error}`);
         return true;
       }
       case "approvals": {

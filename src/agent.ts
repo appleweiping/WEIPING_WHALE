@@ -1,4 +1,11 @@
 import { DeepSeekClient, type Message, type ToolDef, type ToolCall, type Usage } from "./llm/deepseek.js";
+import {
+  planCompaction,
+  shouldCompact,
+  buildSummaryInput,
+  SUMMARY_SYSTEM_PROMPT,
+  type CompactionPlan,
+} from "./compaction.js";
 import { getToolDefs, getTool, registerTool } from "./tools/registry.js";
 import { MCPManager } from "./mcp/manager.js";
 import {
@@ -82,23 +89,63 @@ export class Agent {
     this.messages = messages;
   }
 
+  /**
+   * Heuristic compaction (no API call): pin recent tail + errors/patches/working
+   * set, fold the rest into a concise extractive summary. Tool-call pairs kept.
+   */
   compactContext(keepRecent = 12): string {
-    if (this.messages.length <= keepRecent + 1) {
+    if (this.messages.length <= Math.max(keepRecent, 6) + 1) {
       return "Context is already compact.";
     }
-    const system = this.messages[0];
-    const oldMessages = this.messages.slice(1, -keepRecent);
-    const recent = this.messages.slice(-keepRecent);
-    const summary = summarizeMessages(oldMessages);
-    this.messages = [
-      system,
-      {
-        role: "system",
-        content: `Conversation summary before compaction:\n${summary}`,
-      },
-      ...recent,
-    ];
-    return `Compacted ${oldMessages.length} messages; kept ${recent.length} recent messages.`;
+    const plan = planCompaction(this.messages);
+    if (!shouldCompact(plan)) {
+      return "Context is already compact.";
+    }
+    const summaryBody = summarizeMessages(plan.summarize.map((i) => this.messages[i]));
+    this.messages = this.assembleCompacted(plan, `Conversation summary before compaction:\n${summaryBody}`);
+    return `Compacted ${plan.summarize.length} messages; pinned ${plan.pinned.length}.`;
+  }
+
+  /**
+   * Model-driven compaction: same plan, but the folded messages are summarized
+   * by a real LLM call for higher fidelity. Falls back to heuristic on error.
+   */
+  async compactWithSummary(): Promise<string> {
+    const plan = planCompaction(this.messages);
+    if (!shouldCompact(plan)) return "Context is already compact.";
+    const largeContext = /1m|1000k|pro/i.test(this.client.getModel());
+    const input = buildSummaryInput(this.messages, plan.summarize, largeContext);
+    let summary: string;
+    try {
+      const result = await this.client.complete({
+        messages: [
+          { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+          { role: "user", content: input },
+        ],
+      });
+      summary = (result.content ?? "").trim() || summarizeMessages(plan.summarize.map((i) => this.messages[i]));
+    } catch {
+      summary = summarizeMessages(plan.summarize.map((i) => this.messages[i]));
+    }
+    this.messages = this.assembleCompacted(plan, `## Compaction Relay\n${summary}`);
+    return `Compacted ${plan.summarize.length} messages via model summary; pinned ${plan.pinned.length}.`;
+  }
+
+  /** Rebuild the message list: system prompt, summary block, then pinned messages in order. */
+  private assembleCompacted(plan: CompactionPlan, summaryContent: string): Message[] {
+    const out: Message[] = [];
+    const pinnedSet = new Set(plan.pinned);
+    // Leading system prompt (index 0) stays first if present.
+    let startPinned = 0;
+    if (this.messages[0]?.role === "system" && pinnedSet.has(0)) {
+      out.push(this.messages[0]);
+      startPinned = 1;
+    }
+    out.push({ role: "system", content: summaryContent });
+    for (let i = startPinned; i < this.messages.length; i++) {
+      if (pinnedSet.has(i)) out.push(this.messages[i]);
+    }
+    return out;
   }
 
   async run(userMessage: string, events: AgentEvents = {}): Promise<string> {

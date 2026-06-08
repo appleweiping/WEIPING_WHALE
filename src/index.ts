@@ -633,7 +633,7 @@ const COMMAND_DEFS = [
   { name: "model", args: "<name>", description: "switch model preset or full model name" },
   { name: "thinking", args: "<mode>", description: "switch thinking: auto, on, off, high, max" },
   { name: "session", args: "", description: "save and show current session path", submit: true },
-  { name: "compact", args: "[n]", description: "summarize older context, keeping n recent messages" },
+  { name: "compact", args: "[fast]", description: "summarize older context (model summary; 'fast' = offline heuristic)" },
   { name: "snapshots", args: "", description: "list workspace snapshots (side-git checkpoints)", submit: true },
   { name: "cost", args: "", description: "show session token usage, cost, and cache-hit ratio", submit: true },
   { name: "restore", args: "<id>", description: "restore workspace files to a snapshot id" },
@@ -801,8 +801,11 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         return true;
       }
       case "compact": {
-        const keep = arg ? Number(arg) : 12;
-        const message = context.agent.compactContext(Number.isFinite(keep) ? keep : 12);
+        // `/compact` uses a model summary; `/compact fast` is the offline heuristic.
+        const fast = /^fast$/i.test(arg.trim());
+        const message = fast
+          ? context.agent.compactContext()
+          : await context.agent.compactWithSummary();
         saveSession(context.sessionId, process.cwd(), context.agent.getRuntime(), context.agent.getMessages());
         console.log(message);
         return true;

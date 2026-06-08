@@ -1,4 +1,4 @@
-import { DeepSeekClient, type Message, type ToolDef, type ToolCall } from "./llm/deepseek.js";
+import { DeepSeekClient, type Message, type ToolDef, type ToolCall, type Usage } from "./llm/deepseek.js";
 import { getToolDefs, getTool, registerTool } from "./tools/registry.js";
 import { MCPManager } from "./mcp/manager.js";
 import {
@@ -125,6 +125,7 @@ export class Agent {
         messages: this.messages,
         tools: allTools.length > 0 ? allTools : undefined,
       });
+      events.onUsage?.(this.client.getModel(), result.usage);
 
       if (result.tool_calls.length === 0) {
         const reply = result.content || "";
@@ -250,4 +251,5 @@ export interface AgentEvents {
   onThinking?: (iteration: number) => void;
   onToolStart?: (name: string, args: Record<string, any>) => void;
   onToolEnd?: (name: string, elapsedMs: number, error: boolean) => void;
+  onUsage?: (model: string, usage: Usage) => void;
 }

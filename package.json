@@ -16,7 +16,7 @@
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
     "scan:release": "node scripts/release-scan.mjs",
     "smoke:package": "node scripts/package-smoke.mjs",
-    "test": "npm run build && node scripts/e2e.mjs && node --import tsx scripts/e2e-snapshots.mjs && node --import tsx scripts/e2e-sessions.mjs && npm run smoke:package && npm run scan:release"
+    "test": "npm run build && node scripts/e2e.mjs && node --import tsx scripts/e2e-snapshots.mjs && node --import tsx scripts/e2e-sessions.mjs && node --import tsx scripts/e2e-cost.mjs && npm run smoke:package && npm run scan:release"
   },
   "keywords": [
     "deepseek",

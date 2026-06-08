@@ -31,11 +31,19 @@ export interface CompletionOptions {
   stream?: boolean;
 }
 
+export interface Usage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  /** DeepSeek prefix-cache accounting (present when the provider reports it). */
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+}
+
 export interface CompletionResult {
   content: string | null;
   reasoning_content: string | null;
   tool_calls: ToolCall[];
-  usage: { prompt_tokens: number; completion_tokens: number };
+  usage: Usage;
 }
 
 // PLACEHOLDER_STREAMING
@@ -123,7 +131,7 @@ export class DeepSeekClient {
       content: choice.message?.content ?? null,
       reasoning_content: choice.message?.reasoning_content ?? null,
       tool_calls: choice.message?.tool_calls ?? [],
-      usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
+      usage: normalizeUsage(data.usage),
     };
   }
 
@@ -251,8 +259,26 @@ export class DeepSeekClient {
   }
 }
 
-function parseRemoteError(text: string): { type: string; message?: string } {
-  if (!text.trim()) return { type: "empty_response" };
+function normalizeUsage(raw: any): Usage {
+  if (!raw || typeof raw !== "object") {
+    return { prompt_tokens: 0, completion_tokens: 0 };
+  }
+  const usage: Usage = {
+    prompt_tokens: Number(raw.prompt_tokens) || 0,
+    completion_tokens: Number(raw.completion_tokens) || 0,
+  };
+  if (raw.prompt_cache_hit_tokens != null) usage.prompt_cache_hit_tokens = Number(raw.prompt_cache_hit_tokens) || 0;
+  if (raw.prompt_cache_miss_tokens != null) usage.prompt_cache_miss_tokens = Number(raw.prompt_cache_miss_tokens) || 0;
+  // Some providers nest cache info under prompt_tokens_details.cached_tokens.
+  const cached = raw.prompt_tokens_details?.cached_tokens;
+  if (usage.prompt_cache_hit_tokens == null && cached != null) {
+    usage.prompt_cache_hit_tokens = Number(cached) || 0;
+    usage.prompt_cache_miss_tokens = Math.max(0, usage.prompt_tokens - usage.prompt_cache_hit_tokens);
+  }
+  return usage;
+}
+
+function parseRemoteError(text: string): { type: string; message?: string } {  if (!text.trim()) return { type: "empty_response" };
   try {
     const data = JSON.parse(text) as any;
     const remote = data?.error ?? data;

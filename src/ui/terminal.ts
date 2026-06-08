@@ -897,7 +897,13 @@ function truncateDisplay(value: string, width: number): string {
 }
 
 export function printAssistant(text: string) {
-  console.log(`\n${BOLD}DeepSeek${RESET}\n${text}\n`);
+  console.log(`\n${BOLD}WEIPING_WHALE${RESET}\n${text}\n`);
+}
+
+/** A subtle one-line cost/cache footer. color tints just the chip. */
+export function printFooter(text: string, color?: "red" | "yellow" | "green" | "none") {
+  const tint = color === "red" ? RED : color === "yellow" ? YELLOW : color === "green" ? GREEN : DIM;
+  process.stderr.write(`${DIM}└ ${RESET}${tint}${text}${RESET}\n`);
 }
 
 export function printInfo(text: string) {

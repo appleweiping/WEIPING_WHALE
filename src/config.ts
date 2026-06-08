@@ -34,6 +34,7 @@ export interface Config {
     enabled?: boolean;
     retention_days?: number;
   };
+  pricing?: Record<string, { cache_hit_usd?: number; cache_miss_usd?: number; output_usd?: number }>;
   mcp_servers: Record<string, MCPServerConfig>;
 }
 

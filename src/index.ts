@@ -2,6 +2,7 @@
 import { EventEmitter } from "events";
 import { MODEL_PRESETS, applyRuntimeOverrides, loadConfig, validateConfig, type Config } from "./config.js";
 import { Agent } from "./agent.js";
+import type { Usage } from "./llm/deepseek.js";
 import { MCPManager } from "./mcp/manager.js";
 import { getToolDefs } from "./tools/registry.js";
 import { formatPatchList, applyFilePatch, createFilePatch, rejectFilePatch } from "./safety/patches.js";
@@ -20,6 +21,7 @@ import {
   createRL,
   printAssistant,
   printError,
+  printFooter,
   printHelp,
   printInfo,
   printRuntimeUpdated,
@@ -40,6 +42,7 @@ import "./tools/glob.js";
 import "./tools/snapshot-tool.js";
 import { SnapshotManager } from "./snapshot/manager.js";
 import { setActiveSnapshotManager } from "./tools/snapshot-tool.js";
+import { CostTracker } from "./cost.js";
 
 // ── Execution mode ────────────────────────────────────────────────────────────
 type ExecMode = "auto" | "plan" | "ask";
@@ -188,10 +191,12 @@ async function main() {
     sandboxMode: getSandboxMode(),
     writeMode: getWriteMode(),
   });
+  const costTracker = new CostTracker(config.pricing);
   const events = {
     onThinking: json ? undefined : printThinking,
     onToolStart: json ? undefined : printToolStart,
     onToolEnd: json ? undefined : printToolEnd,
+    onUsage: (model: string, usage: Usage) => costTracker.record(model, usage),
   };
   const persistSnapshot = async (
     status: "closed" | "interrupted" | "error" | "manual" | "completed",
@@ -239,6 +244,7 @@ async function main() {
     mcpManager,
     config,
     snapshotManager,
+    costTracker,
     persistSnapshot,
   };
   const rl = createRL((context) => buildSlashMenu(context.line, context.cursor));
@@ -261,6 +267,7 @@ async function main() {
       snapshotManager.afterTurn();
       await persistSnapshot("completed", "assistant reply completed");
       printAssistant(reply);
+      printFooter(costTracker.footer(), costTracker.cacheColor());
     } catch (err: any) {
       const message = safeErrorMessage(err);
       printError(`Error: ${message}`);
@@ -588,6 +595,7 @@ interface CommandContext {
   mcpManager: MCPManager;
   config: Config;
   snapshotManager: SnapshotManager;
+  costTracker: CostTracker;
   persistSnapshot: (
     status: "closed" | "interrupted" | "error" | "manual" | "completed",
     note?: string,
@@ -627,6 +635,7 @@ const COMMAND_DEFS = [
   { name: "session", args: "", description: "save and show current session path", submit: true },
   { name: "compact", args: "[n]", description: "summarize older context, keeping n recent messages" },
   { name: "snapshots", args: "", description: "list workspace snapshots (side-git checkpoints)", submit: true },
+  { name: "cost", args: "", description: "show session token usage, cost, and cache-hit ratio", submit: true },
   { name: "restore", args: "<id>", description: "restore workspace files to a snapshot id" },
   { name: "undo", args: "", description: "undo the most recent workspace change via snapshots", submit: true },
   { name: "approvals", args: "", description: "list pending shell approvals", submit: true },
@@ -832,6 +841,22 @@ async function handleCommand(input: string, context: CommandContext): Promise<bo
         const result = context.snapshotManager.undo();
         if (result.ok) printInfo(`Undid last change; restored snapshot ${result.restored?.slice(0, 12)}.`);
         else printError(`Undo failed: ${result.error}`);
+        return true;
+      }
+      case "cost": {
+        const s = context.costTracker.snapshot();
+        const ratio = context.costTracker.cacheHitRatio();
+        console.log(
+          [
+            `cost_usd: $${s.costUsd.toFixed(4)}`,
+            `turns: ${s.turns}`,
+            `prompt_tokens: ${s.promptTokens}`,
+            `completion_tokens: ${s.completionTokens}`,
+            `cache_hit_tokens: ${s.cacheHitTokens}`,
+            `cache_miss_tokens: ${s.cacheMissTokens}`,
+            `cache_hit_ratio: ${ratio == null ? "n/a" : `${Math.round(ratio * 100)}%`}`,
+          ].join("\n"),
+        );
         return true;
       }
       case "approvals": {

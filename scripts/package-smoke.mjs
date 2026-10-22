@@ -39,14 +39,14 @@ try {
   const installedManifest = JSON.parse(
     readFileSync(join(temp, "node_modules", "weiping-whale", "package.json"), "utf8"),
   );
-  assert.equal(installedManifest.version, "0.4.1");
+  assert.equal(installedManifest.version, "0.5.0");
 
   for (const name of ["weiping-whale", "wwhale"]) {
     const bin = process.platform === "win32"
       ? join(temp, "node_modules", ".bin", `${name}.cmd`)
       : join(temp, "node_modules", ".bin", name);
     const version = spawn(bin, ["--version"], { cwd: temp, shell: process.platform === "win32" });
-    assert.match(version.stdout, /0\.4\.1/);
+    assert.match(version.stdout, /0\.5\.0/);
   }
 
   const bin = process.platform === "win32"
@@ -62,7 +62,7 @@ try {
   assert.equal(payload.ok, true);
   assert.equal(payload.auth.api_key, "configured");
   assert.equal(payload.auth.source, "env:DEEPSEEK_API_KEY");
-  assert.equal(payload.version, "0.4.1");
+  assert.equal(payload.version, "0.5.0");
   assert.equal(payload.endpoint.host, "api.deepseek.com");
   assert.equal(payload.base_url, undefined);
 

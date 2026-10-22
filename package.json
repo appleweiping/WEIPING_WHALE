@@ -1,6 +1,6 @@
 {
   "name": "weiping-whale",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A small terminal coding agent for DeepSeek models, written in TypeScript as a port of CodeWhale.",
   "type": "module",
   "main": "dist/index.js",

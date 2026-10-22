@@ -9,6 +9,8 @@
   `DEEPSEEK_AGENTMEMORY=1`).
 - Added `THIRD_PARTY_NOTICES.md` with CodeWhale's license; fixed the LICENSE holder.
 - Moved the configuration reference to `docs/usage.md` and rewrote the README.
+- Upgraded `@modelcontextprotocol/client` to 2.3.1 and `js-yaml` to 4.3.2 for
+  security advisories.
 
 ## 0.4.1
 

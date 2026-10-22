@@ -1,288 +1,190 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/appleweiping/WEIPING_WHALE/master/assets/banner.png" alt="WEIPING_WHALE" width="720" />
-</p>
+# WEIPING_WHALE
 
-<p align="center">
-  <strong>WEIPING_WHALE — a terminal-native DeepSeek coding agent.</strong>
-</p>
+A small terminal coding agent for DeepSeek models: it reads your repository, runs
+commands after asking, proposes edits as patches you apply, and checkpoints the
+workspace around every turn so any turn can be undone.
 
-<p align="center">
-  Budgeted repo maps · side-git snapshots · session fork/backtrack · auto model routing ·
-  skills · sub-agents · LSP diagnostics · official MCP SDK · optional local HTTP/SSE API.
-</p>
+It is a TypeScript port of the design of
+**[CodeWhale](https://github.com/codewhale-hq/Codewhale)** (formerly `deepseek-tui`,
+MIT), a much larger and more mature Rust agent. The snapshot scheme, session
+fork/backtrack, cost footer, auto-routing and prompt layout all come from CodeWhale;
+see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Not affiliated with DeepSeek.
 
-WEIPING_WHALE is a focused coding-agent CLI for people who want a small, honest
-terminal tool rather than a web app. It inspects files, searches with glob/grep,
-runs shell commands behind approval gates, previews edits as patches, checkpoints
-your workspace around every turn so you can `/undo`, routes between DeepSeek models
-per turn, supplies an ignore-aware map of the repository, connects MCP servers through
-the official SDK, and can expose a localhost HTTP/SSE control surface.
+```text
+$ npm run demo          # build output and startup banner left out
+session: demo
+path: ~/.weiping-whale/sessions/demo.json
+━━ test.mjs fails, find the bug and fix it
+thinking...
+tool execute_bash {"command":"node test.mjs"}
+  execute_bash failed in 3471ms
+thinking round 2...
+tool read_file {"path":"src/slugify.mjs"}
+  read_file done in 12ms
+thinking round 3...
+tool edit_file {"path":"src/slugify.mjs","old_string":"    .replace(/[^a-z0-9]+/g, \"-\");","new_string":"    .replace(/[^a-z0-9]+/g...
+  edit_file done in 174ms
+thinking round 4...
 
-> **Based on [CodeWhale](https://github.com/Hmbown/CodeWhale) (MIT).** WEIPING_WHALE
-> re-implements CodeWhale's feature set in TypeScript. CodeWhale is the mature Rust
-> implementation of the same idea; this is a smaller, hackable TS sibling.
-> Not affiliated with DeepSeek Inc.
+WEIPING_WHALE
+`node test.mjs` fails because slugify("Hello, World!") returns "hello-world-".
+The regex turns every run of non-alphanumerics into a dash, including the
+trailing "!", and nothing trims dashes at the ends.
+
+I prepared patch 6f52149d, which strips leading and trailing dashes.
+Review it with /patches, then /apply 6f52149d.
+
+└ $0.0004 · 6.5k tok · cache 71%
+━━ /apply 6f52149d
+Applied patch 6f52149d to ~/slugify-demo/src/slugify.mjs
+━━ run the tests again
+thinking...
+tool execute_bash {"command":"node test.mjs"}
+  execute_bash done in 2452ms
+thinking round 2...
+
+WEIPING_WHALE
+Ran `node test.mjs`: 2 tests passed
+
+└ $0.0005 · 10.4k tok · cache 80%
+━━ /snapshots
+4e7b557da997  2026-10-22 04:59:01  post-turn:2
+ecaf8c885847  2026-10-22 04:58:55  pre-turn:2
+7f520501f32a  2026-10-22 04:58:51  post-turn:1
+507aabc12156  2026-10-22 04:58:42  pre-turn:1
+```
+
+That session is real except for the model. `npm run demo` starts
+[`scripts/mock-deepseek.mjs`](scripts/mock-deepseek.mjs), a fake DeepSeek endpoint
+whose replies are scripted, and points the built CLI at it. The shell command, the
+file read, the patch preview, the snapshots and the session file are produced by the
+actual tool code; the token counts are the mock's rough estimate (4 characters per
+token) priced at the default flash rates. The same session as an image is in
+[docs/demo.png](docs/demo.png).
+
+## Why I built it
+
+I wanted to understand how tools like Claude Code, Codex and CodeWhale work, not just
+use them. Porting CodeWhale to a language I read every day, at a size I can hold in my
+head, was the most direct way. If you just want a coding agent, use CodeWhale itself
+(OS sandboxing, more language servers, more providers), [Aider](https://github.com/Aider-AI/aider),
+or one of the vendor CLIs. This repo is for reading and changing the loop.
 
 ## Install
 
-Requires Node.js 22.18 or newer.
-
-The `weiping-whale` package is **not currently published to the npm registry**.
-Until a signed registry release exists, install the reviewed source tree and link
-the already-built package:
+Requires Node.js 22.18 or newer and git. The package is not published on npm.
 
 ```bash
 git clone https://github.com/appleweiping/WEIPING_WHALE.git
 cd WEIPING_WHALE
 npm ci
-npm run build
-npm link
-weiping-whale --version
+npm run demo            # builds, then replays the session above; no API key needed
+npm link                # puts `wwhale` and `weiping-whale` on your PATH
 ```
 
-For a checkout-local verification, use `node dist/index.js --version` after the
-build and skip `npm link`. Linking exposes three binaries: `weiping-whale`, `wwhale`, and
-`deepseek` (a back-compat alias). State lives in `~/.weiping-whale/` (falling
-back to a legacy `~/.deepseek-cli/` if present, so existing sessions keep
-working).
-
-## First Run
+With a DeepSeek key:
 
 ```bash
-export DEEPSEEK_API_KEY="<your-key>"
-wwhale --doctor
-wwhale
-```
-
-Useful invocations:
-
-```bash
+export DEEPSEEK_API_KEY=sk-...
+wwhale --doctor         # checks config, key source and paths
+wwhale                  # REPL in the current directory
 wwhale -t "summarize the architecture of this repo"
-wwhale --model auto -t "find and fix the failing test"
-wwhale --model pro --thinking max -t "review this change for security gaps"
-wwhale --last
-wwhale --serve --port 7878
 ```
 
-## Features
+Inside the REPL, `/patches` and `/apply <id>` review edits, `/approve <id>` runs a held
+shell command, `/undo` rolls the workspace back one turn, and `/cost` shows spend.
+The full list of commands, config keys and safety profiles is in
+[docs/usage.md](docs/usage.md).
 
-| Area | What it does |
-| --- | --- |
-| Model runtime | DeepSeek V4 Pro/Flash presets, thinking controls, `--model auto` per-turn routing |
-| Repository context | ignore-aware, budgeted file/symbol map for large-codebase orientation |
-| File work | `read_file`, `write_file`, `edit_file`, `glob`, `grep` |
-| Shell work | `execute_bash` with blocked-command rules, approval queue, bounded timeout |
-| Patch safety | writes default to preview; apply with `/apply <id>` |
-| Snapshots | side-git checkpoints each turn; `/snapshots`, `/restore`, `/undo`, `revert_turn` |
-| Sessions | named sessions, `/fork`, `/backtrack`, `--last`, resume by id/prefix |
-| Cost | live cost + prefix-cache-hit footer chip; `/cost` |
-| Compaction | `/compact` (model summary) and `/compact fast` (offline), tool-call-safe |
-| Skills | workspace + global `SKILL.md` discovery; `/skills install owner/repo` |
-| Sub-agents | `agent_open` / `agent_eval` bounded background workers |
-| LSP | post-edit diagnostics from TypeScript + Python language servers |
-| Vision | attach images with `/image`; sent as `image_url` content blocks |
-| MCP | official MCP TypeScript SDK v2: current/legacy negotiation, pagination, schemas, timeouts, clean shutdown |
-| HTTP API | optional `--serve` localhost control surface with bearer-token auth |
-| Memory | agentmemory REST when reachable; local outbox when offline |
+## How a coding agent works in ~8.5k lines
 
-## Repository map
+`src/` is about 8,500 lines of TypeScript (`wc -l src/*.ts src/*/*.ts`). One turn
+looks like this:
 
-At session start, WEIPING_WHALE builds a deterministic map of git-visible source
-and project files. It extracts concise top-level symbols for common languages and
-keeps the map within a strict character/file budget. Gitignored files, build output,
-binary assets, and symlink escapes are excluded. The map is orientation only—the
-agent is explicitly told to open files before relying on implementation details.
-
-```toml
-[context]
-repo_map_enabled = true
-repo_map_max_chars = 12000
-repo_map_max_files = 400
+```mermaid
+flowchart TD
+    P["System prompt<br/>prompts/base.md + AGENTS.md/CLAUDE.md<br/>+ repo map + skills<br/>src/prompts/assemble.ts"] --> L
+    U["You: REPL, -t task or HTTP API<br/>src/index.ts"] --> S1["pre-turn snapshot<br/>src/snapshot/"]
+    S1 --> R{"--model auto?<br/>src/router.ts"}
+    R --> L["Agent loop<br/>src/agent.ts"]
+    L -->|"messages + tool schemas"| M["DeepSeek chat API<br/>src/llm/deepseek.ts"]
+    M -->|"usage"| C["Cost and cache-hit tracker<br/>src/cost.ts"]
+    M -->|"tool_calls"| T["Tool registry<br/>src/tools/registry.ts"]
+    T --> B["Built-in tools<br/>read/write/edit, glob/grep, bash,<br/>todo, revert_turn, sub-agents"]
+    T --> X["MCP servers<br/>src/mcp/"]
+    B --> G["Approval queue and patch previews<br/>src/safety/"]
+    G -->|"tool results"| L
+    X -->|"tool results"| L
+    M -->|"plain answer"| S2["post-turn snapshot<br/>save session JSON<br/>src/session.ts"]
 ```
 
-## Snapshots & undo
+1. **Prompt.** [`src/prompts/assemble.ts`](src/prompts/assemble.ts) builds one system
+   message, most static part first so DeepSeek's prefix cache keeps hitting:
+   [`prompts/base.md`](prompts/base.md), the project's `AGENTS.md`/`CLAUDE.md`, a
+   size-limited map of tracked files and their top-level symbols
+   ([`src/context/repo-map.ts`](src/context/repo-map.ts)), and the list of skills.
+2. **Checkpoint.** Before the turn, [`src/snapshot/repo.ts`](src/snapshot/repo.ts)
+   commits the whole workspace into a separate git repository under
+   `~/.weiping-whale/snapshots/`, passing `--git-dir` and `--work-tree` explicitly so
+   your own `.git` is never touched. `/undo` checks that tree back out.
+3. **Routing.** With `--model auto`, [`src/router.ts`](src/router.ts) picks flash or
+   pro and the thinking level from keywords in your message. No extra API call.
+4. **The loop.** [`Agent.complete()`](src/agent.ts) sends the messages plus every tool
+   schema, executes each returned tool call, appends the results and asks again,
+   until the model answers without tool calls or `max_iterations` is reached. The
+   loop and its tool dispatcher are about 80 lines; most of the code is the tools
+   and bookkeeping around it.
+5. **Tools and safety.** Built-in tools live in [`src/tools/`](src/tools/). Shell
+   commands are matched against two regex lists in
+   [`src/safety/approval.ts`](src/safety/approval.ts): broad recursive deletes, disk
+   and shutdown commands are always blocked; deletes, moves, redirections, package
+   installs, force-pushes and `ssh` wait for `/approve`; everything else runs. In the
+   default mode `edit_file` and `write_file` only create a preview
+   ([`src/safety/patches.ts`](src/safety/patches.ts)) until you `/apply` it. MCP
+   tools come from the official SDK client in [`src/mcp/client.ts`](src/mcp/client.ts)
+   and are namespaced per server.
+6. **Cost.** Every response's `usage` goes to [`src/cost.ts`](src/cost.ts), which
+   prices cache-hit and cache-miss input tokens separately; the footer turns yellow
+   or red when the cache-hit ratio drops, which usually means the context was
+   reshuffled.
+7. **Sessions.** After the turn the message list is saved as JSON
+   ([`src/session.ts`](src/session.ts)). `/fork` copies it into a new session,
+   `/backtrack n` cuts it just before the n-th last user message, and `/compact`
+   ([`src/compaction.ts`](src/compaction.ts)) folds old messages into a summary while
+   keeping tool calls paired with their results.
+8. **Sub-agents.** `agent_open` starts another `Agent` with a copy of the config
+   ([`src/tools/subagent.ts`](src/tools/subagent.ts)); the pool and nesting depth are
+   capped.
 
-Every turn is checkpointed into a **separate** git repository under
-`~/.weiping-whale/snapshots/` — your own `.git` is never touched. If a turn makes
-a mess, `/undo` rolls the workspace back, `/restore <id>` jumps to a specific
-snapshot, and the model can call `revert_turn` to undo its own edits.
+The terminal UI ([`src/ui/terminal.ts`](src/ui/terminal.ts)), LSP diagnostics after
+edits ([`src/lsp/`](src/lsp/)) and the optional `--serve` HTTP/SSE API
+([`src/server/runtime-api.ts`](src/server/runtime-api.ts)) sit around this core.
 
-## Auto routing
-
-With `--model auto` (or `/model auto`), a fast zero-cost keyword heuristic picks
-the model and thinking level for each turn: hard signals (debug, error, 调试, デバッグ)
-route to `pro` + max thinking, light ones (search, format, 格式化) to `flash`, and
-everything else to a sensible default.
-
-## Skills
-
-Drop a folder containing a `SKILL.md` (YAML frontmatter `name` + `description`)
-into `.weiping-whale/skills/` (workspace) or `~/.weiping-whale/skills/` (global).
-WEIPING_WHALE also discovers `.claude/skills` and `.agents/skills` for cross-tool
-reuse, and can install from GitHub:
+## Tests
 
 ```bash
-# inside the REPL
-/skills list
-/skills install owner/repo
-```
-
-## LSP diagnostics
-
-After a direct file write or `/apply`, WEIPING_WHALE asks a language server for
-diagnostics and feeds errors back to the model. Install the servers you want:
-
-```bash
-npm install -g typescript-language-server typescript   # TypeScript/JavaScript
-npm install -g pyright                                  # Python
-```
-
-Diagnostics are best-effort: if a server isn't installed, it's skipped silently.
-
-## HTTP/SSE API (optional, off by default)
-
-`wwhale --serve` starts a control surface bound to `127.0.0.1` that requires a
-bearer token (auto-generated and printed once at startup):
-
-```
-GET  /health                      # unauthenticated liveness
-GET  /v1/cost                     # session cost snapshot
-POST /v1/message  {"message":"…"} # run a turn, returns { reply }
-POST /v1/stream   {"message":"…"} # Server-Sent Events: start / reply / done
-```
-
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  -d '{"message":"list the open TODOs"}' \
-  http://127.0.0.1:7878/v1/message
-```
-
-Turns are serialized with the interactive REPL, in-flight turns and SSE
-connections are capped, and the prompt is sent in the request body (never the
-URL). Binding to a non-localhost host prints a loud warning — anyone who can
-reach the host and token can drive the agent.
-
-## Safety profiles
-
-Use `/permission-model <mode>` or the equivalent environment variables.
-
-| Profile | Writes | Sandbox | Shell |
-| --- | --- | --- | --- |
-| `safe` | preview | workspace only | ask for risky commands |
-| `read-only` | blocked | read-only | ask for risky commands |
-| `trusted` | direct | unrestricted | auto-run except blocked patterns |
-| `locked` | preview | read-only | never run risky commands |
-
-The default is `safe`. Broadly destructive shell commands stay blocked even in
-permissive modes. Workspace writes reject lexical escapes and symlink/junction
-traversal. This is approval-gating and path containment, **not** an OS sandbox.
-
-## Workspace config trust
-
-A repository can place `weiping-whale.toml` in its root. That file can redirect
-the provider endpoint (and therefore an API key) or launch MCP child processes, so
-workspace-local TOML is ignored until that exact canonical directory is trusted:
-
-```bash
-wwhale --cwd path/to/repo --trust-workspace --doctor
-```
-
-The decision is stored in `~/.weiping-whale/trusted-workspaces.json`. Explicit
-`WEIPING_WHALE_CONFIG` / `DEEPSEEK_CONFIG` paths and user-level config remain
-available without workspace trust because choosing them is already an explicit
-user action. `--doctor` reports the active config scope and any ignored local file.
-
-## Configuration
-
-WEIPING_WHALE loads the first eligible config file it finds:
-
-1. `WEIPING_WHALE_CONFIG` / `DEEPSEEK_CONFIG`
-2. trusted `./weiping-whale.toml` / `./.weiping-whale.toml`
-3. trusted `./deepseek-cli.toml` / `./.deepseek-cli.toml`
-4. `~/.weiping-whale/config.toml` / `~/.deepseek-cli/config.toml`
-5. the packaged fallback `config.toml`
-
-```toml
-[llm]
-model = "flash"
-api_key_env = "DEEPSEEK_API_KEY"
-base_url = "https://api.deepseek.com"
-
-[agent]
-workspace = "."
-max_iterations = 50
-
-[snapshots]
-enabled = true
-retention_days = 7
-
-[subagents]
-max_agents = 4
-max_depth = 2
-
-[lsp]
-enabled = true
-include_warnings = false
-
-[context]
-repo_map_enabled = true
-repo_map_max_chars = 12000
-repo_map_max_files = 400
-
-# MCP servers use the official SDK. Optional include_tools is an allowlist;
-# exclude_tools removes individual tools after paginated discovery.
-[mcp_servers.example]
-command = "node"
-args = ["server.mjs"]
-timeout_ms = 60000
-include_tools = ["search", "read"]
-```
-
-## Diagnostics
-
-`wwhale --doctor --json` prints a structured report (runtime, endpoint host, auth
-source, paths, safety modes, MCP state) and exits non-zero on required-check
-failures. It never prints API keys, tokens, or full provider URLs.
-
-## Development
-
-```bash
-npm ci
 npm run typecheck
-npm test          # build + e2e suites + package smoke + release scan
-npm run audit:prod
+npm test
 ```
 
-CI runs the full gate on both Ubuntu and Windows.
+`npm test` builds the CLI and runs 18 end-to-end scripts in [`scripts/`](scripts/)
+(snapshots, sessions, cost, compaction, routing, MCP against a fake server, the HTTP
+API, the full agent loop against the mock model, and more), then packs the tarball,
+installs it in a temp directory and runs both binaries. Nothing calls the real
+DeepSeek API. CI runs the same on Ubuntu and Windows.
 
-## Relationship to Neighbor Projects
+## Limitations
 
-- `WEIPING_WHALE` is the terminal coding worker. It owns its local sessions,
-  checkpoints, `.weiping-whale/handoff.md`, tools, and optional HTTP/SSE surface.
-- `WEIPING_COUNCIL` owns multi-model deliberation and its own council-session JSON
-  contract; Whale does not reinterpret those files as native Whale sessions.
-- `WEIPING_LAB` owns research-workbench artifacts. Paths or redacted summaries can be
-  handed over explicitly, but neither project is a runtime dependency of the other.
-- `WEIPING_WIKI` is the public route map and `AGENT_RESOURCE` is an optional shared
-  skill library. Whale remains usable without either checkout or any private local path.
-
-## Upstream design references
-
-This release re-implements compatible patterns rather than copying source:
-
-- [Aider](https://github.com/Aider-AI/aider) (Apache-2.0): budgeted repository maps.
-- [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0): explicit workspace boundaries and project instructions.
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Apache-2.0): trust-gating repository-local configuration.
-- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) (MIT/Apache-2.0): the official client is used directly as a dependency.
-
-## Relationship to CodeWhale
-
-CodeWhale (formerly `deepseek-tui`) is a large, mature Rust coding agent.
-WEIPING_WHALE is an independent TypeScript project that ports CodeWhale's ideas
-at a much smaller scale, keeping the core hackable. Where CodeWhale ships OS
-sandboxing and a 7-language LSP stack, WEIPING_WHALE stays honest about being a
-TS tool: approval-gated shell (no OS sandbox) and a TypeScript/Python LSP subset.
+- Shell safety is approval prompts plus pattern matching, not an OS sandbox. A
+  command you approve runs with your permissions.
+- The client targets DeepSeek's OpenAI-compatible chat API; other endpoints set via
+  `base_url` are untested. The default prices in `src/cost.ts` will drift; override
+  them with `[pricing]` in the config.
+- LSP diagnostics cover TypeScript/JavaScript and Python, and only if the language
+  servers are installed.
+- The demo and tests prove the plumbing, not the quality of the model's edits.
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE). CodeWhale's MIT notice is in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

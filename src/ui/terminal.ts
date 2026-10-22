@@ -972,15 +972,15 @@ ${BOLD}Line editing${RESET}
   At the top or bottom visual row, Up/Down navigates command history.
 
 ${BOLD}Non-interactive${RESET}
-  deepseek --models
-  deepseek --json --doctor
-  deepseek --session work1 -t "start a task"
-  deepseek --resume work1 -t "continue"
-  deepseek --cwd path/to/repo -t "inspect this project"
-  deepseek --cwd path/to/repo --trust-workspace --doctor
-  deepseek -t "summarize this repo"
-  deepseek --model pro --thinking on -t "review this PR"
-  deepseek --model flash --thinking off --doctor
+  wwhale --models
+  wwhale --json --doctor
+  wwhale --session work1 -t "start a task"
+  wwhale --resume work1 -t "continue"
+  wwhale --cwd path/to/repo -t "inspect this project"
+  wwhale --cwd path/to/repo --trust-workspace --doctor
+  wwhale -t "summarize this repo"
+  wwhale --model pro --thinking on -t "review this PR"
+  wwhale --model flash --thinking off --doctor
 `);
 }
 

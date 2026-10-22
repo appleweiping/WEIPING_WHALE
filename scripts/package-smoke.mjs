@@ -6,7 +6,7 @@ import { basename, join, resolve } from "node:path";
 
 const root = process.cwd();
 const npm = "npm";
-const temp = mkdtempSync(join(tmpdir(), "deepseek-cli-package-smoke-"));
+const temp = mkdtempSync(join(tmpdir(), "weiping-whale-package-smoke-"));
 let tarballPath = "";
 
 try {
@@ -41,7 +41,7 @@ try {
   );
   assert.equal(installedManifest.version, "0.4.1");
 
-  for (const name of ["weiping-whale", "wwhale", "deepseek"]) {
+  for (const name of ["weiping-whale", "wwhale"]) {
     const bin = process.platform === "win32"
       ? join(temp, "node_modules", ".bin", `${name}.cmd`)
       : join(temp, "node_modules", ".bin", name);
@@ -50,8 +50,8 @@ try {
   }
 
   const bin = process.platform === "win32"
-    ? join(temp, "node_modules", ".bin", "deepseek.cmd")
-    : join(temp, "node_modules", ".bin", "deepseek");
+    ? join(temp, "node_modules", ".bin", "wwhale.cmd")
+    : join(temp, "node_modules", ".bin", "wwhale");
 
   const doctor = spawn(bin, ["--json", "--doctor"], {
     cwd: temp,

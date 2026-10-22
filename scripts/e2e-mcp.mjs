@@ -12,7 +12,9 @@ const client = new MCPClient(
 );
 
 try {
-  await client.connect();
+  // Connect gets a generous deadline (spawning node is slow on busy CI hosts);
+  // the 1s timeoutMs above still applies to the tool calls under test.
+  await client.connect(10_000);
   const definitions = client.getToolDefs();
   assert.equal(definitions.length, 6, "official SDK aggregates paginated tools/list responses");
   assert.ok(definitions.every((tool) => /^[A-Za-z0-9_-]{1,64}$/.test(tool.function.name)), "exposed names satisfy provider limits");
@@ -62,7 +64,7 @@ try {
     { timeoutMs: 1_000 },
   );
   try {
-    await colliding.connect();
+    await colliding.connect(10_000);
     const otherNames = new Set(colliding.getToolDefs().map((tool) => tool.function.name));
     assert.ok(
       definitions.every((tool) => !otherNames.has(tool.function.name)),
@@ -94,7 +96,7 @@ try {
     { timeoutMs: 1_000 },
   );
   await assert.rejects(
-    () => endless.connect(),
+    () => endless.connect(10_000),
     /listMaxPages|pagination|exceeded/i,
     "official SDK caps non-terminating unique-cursor pagination",
   );

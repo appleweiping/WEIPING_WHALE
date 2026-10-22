@@ -114,6 +114,9 @@ export async function runDemo({ keep = false } = {}) {
   let prompts = 1;
   const say = async (line) => {
     await waitForPrompt(prompts);
+    // Status lines (footer, "thinking...") go to stderr, the prompt to stdout.
+    // Give stderr a moment so the transcript keeps the order a terminal shows.
+    await new Promise((done) => setTimeout(done, 250));
     transcript += `${line}\n`; // what the user would see echoed by their terminal
     child.stdin.write(`${line}\n`);
     prompts += 1;

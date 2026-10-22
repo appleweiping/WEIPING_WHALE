@@ -116,11 +116,16 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
+// Session autosave to an agentmemory server is opt-in: it runs only when
+// AGENTMEMORY_URL is set or DEEPSEEK_AGENTMEMORY=1. Without that, a fresh
+// install would write an outbox file on every turn for a server nobody runs.
 function isMemoryDisabled(): boolean {
   const explicitDisable = process.env.DEEPSEEK_DISABLE_AGENTMEMORY?.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(explicitDisable ?? "")) return true;
-  const enabled = process.env.DEEPSEEK_AGENTMEMORY?.trim().toLowerCase();
-  return ["0", "false", "no", "off"].includes(enabled ?? "");
+  const flag = process.env.DEEPSEEK_AGENTMEMORY?.trim().toLowerCase() ?? "";
+  if (["0", "false", "no", "off"].includes(flag)) return true;
+  if (["1", "true", "yes", "on"].includes(flag)) return false;
+  return !process.env.AGENTMEMORY_URL?.trim();
 }
 
 function lastMessage(messages: Message[], role: Message["role"]): string | null {

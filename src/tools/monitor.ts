@@ -1,5 +1,5 @@
 /**
- * monitor.ts — Process/file monitoring for DeepSeek CLI
+ * monitor.ts — Process/file monitoring for WEIPING_WHALE
  *
  * Spawns background processes and streams their output as events.
  * Commands: /monitor start <cmd> | /monitor list | /monitor stop <id> | /monitor logs <id>

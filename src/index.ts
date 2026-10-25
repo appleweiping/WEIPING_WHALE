@@ -590,7 +590,7 @@ async function runRuntimeSelfTest() {
     memoryUrl: process.env.AGENTMEMORY_URL,
     outbox: process.env.DEEPSEEK_MEMORY_OUTBOX_DIR,
   };
-  const workspace = mkdtempSync(join(tmpdir(), "deepseek-cli-runtime-self-test-"));
+  const workspace = mkdtempSync(join(tmpdir(), "weiping-whale-runtime-self-test-"));
   try {
     process.chdir(workspace);
     process.env.DEEPSEEK_APPROVAL_MODE = "on-request";

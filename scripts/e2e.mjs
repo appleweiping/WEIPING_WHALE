@@ -6,9 +6,9 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const cli = join(process.cwd(), "dist", "index.js");
-const homeDir = mkdtempSync(join(tmpdir(), "deepseek-cli-home-"));
-const configDir = mkdtempSync(join(tmpdir(), "deepseek-cli-config-"));
-const outboxDir = mkdtempSync(join(tmpdir(), "deepseek-cli-memory-outbox-"));
+const homeDir = mkdtempSync(join(tmpdir(), "weiping-whale-home-"));
+const configDir = mkdtempSync(join(tmpdir(), "weiping-whale-config-"));
+const outboxDir = mkdtempSync(join(tmpdir(), "weiping-whale-memory-outbox-"));
 const configPath = join(configDir, "config.toml");
 const mcpConfigPath = join(configDir, "mcp-config.toml");
 const mcpEnvReport = join(configDir, "mcp-env-report.json");
@@ -138,7 +138,7 @@ try {
   assert.equal(mcpEnv.saw_agentmemory_secret, false);
   assert.equal(mcpEnv.saw_explicit_allowed, true);
 
-  const workspaceDir = mkdtempSync(join(tmpdir(), "deepseek-cli-workspace-"));
+  const workspaceDir = mkdtempSync(join(tmpdir(), "weiping-whale-workspace-"));
   try {
     writeFileSync(join(workspaceDir, "deepseek-cli.toml"), "[agent]\nworkspace = \".\"\n");
     const cwdDoctor = json(["--cwd", workspaceDir, "--doctor"]);

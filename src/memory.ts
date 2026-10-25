@@ -32,7 +32,7 @@ export async function saveSessionMemory(snapshot: SessionMemorySnapshot): Promis
   const payload = {
     content,
     type: snapshot.status === "error" ? "bug" : "fact",
-    concepts: ["deepseek-cli", "session", "autosave", snapshot.status],
+    concepts: ["weiping-whale", "session", "autosave", snapshot.status],
     files: snapshot.files ?? [],
   };
 
@@ -56,7 +56,7 @@ export function formatSessionMemory(snapshot: SessionMemorySnapshot): string {
   const lastUser = lastMessage(snapshot.messages, "user");
   const lastAssistant = lastMessage(snapshot.messages, "assistant");
   const lines = [
-    `DeepSeek CLI session ${snapshot.sessionId} ${snapshot.status}.`,
+    `WEIPING_WHALE session ${snapshot.sessionId} ${snapshot.status}.`,
     `cwd: ${snapshot.cwd}`,
     `runtime: model=${snapshot.runtime.model ?? "unknown"}, thinking=${snapshot.runtime.thinking ?? "unknown"}, reasoning_effort=${snapshot.runtime.reasoning_effort ?? "unknown"}`,
     `messages: ${snapshot.messages.length}`,
@@ -72,13 +72,13 @@ function writeMemoryOutbox(snapshot: SessionMemorySnapshot, content: string): st
   const dir = memoryOutboxDir();
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const path = join(dir, `deepseek-cli-${snapshot.status}-${stamp}.md`);
+  const path = join(dir, `weiping-whale-${snapshot.status}-${stamp}.md`);
   const body = [
     "---",
-    `title: "DeepSeek CLI ${snapshot.status} autosave ${snapshot.sessionId}"`,
+    `title: "WEIPING_WHALE ${snapshot.status} autosave ${snapshot.sessionId}"`,
     "type: fact",
     `created: ${new Date().toISOString()}`,
-    "tags: [deepseek-cli, session, autosave]",
+    "tags: [weiping-whale, session, autosave]",
     "---",
     "",
     content,

@@ -1,7 +1,11 @@
 // Drives a real WEIPING_WHALE session against the scripted mock model.
 //
-//   npm run build && npm run demo           # print the session
-//   node scripts/demo.mjs --svg docs/demo.svg
+//   npm run demo                            # build, then print the session
+//   npm run demo -- --svg demo.svg          # also write it as an SVG image
+//
+// docs/demo.png is that SVG screenshotted at its own size in headless Chrome:
+//   chrome --headless --hide-scrollbars --window-size=<w>,<h> --screenshot=docs/demo.png demo.svg
+// where <w>,<h> are the width and height on the SVG's first line (1166,992).
 //
 // The CLI, its tools, the patch preview, side-git snapshots and the session
 // file are all real; only the model is replaced by scripts/mock-deepseek.mjs.

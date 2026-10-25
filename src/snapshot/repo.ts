@@ -8,7 +8,7 @@
  *
  * A snapshot is a full tree commit created via `git add -A` -> `git write-tree`
  * -> `git commit-tree` -> `git update-ref`, which bypasses hooks and is fast and
- * deterministic. Restore is `git checkout <sha> -- :/` plus deletion of files
+ * repeatable. Restore is `git checkout <sha> -- :/` plus deletion of files
  * that existed in the snapshot's parent state but not the target.
  */
 import { spawnSync } from "child_process";
@@ -301,7 +301,7 @@ export class SnapshotRepo {
    * Restore the workspace to the given snapshot tree. Files present in the
    * current HEAD tree but absent from the target are deleted.
    *
-   * Fail-closed: both file lists are computed BEFORE the checkout, and any
+   * Safe on failure: both file lists are computed BEFORE the checkout, and any
    * ls-tree failure aborts the whole restore (we never proceed to deletion with
    * an unknown target file set). Deletions reject paths whose parents are
    * symlinks or that resolve outside the workspace.
@@ -397,7 +397,7 @@ export class SnapshotRepo {
     return real === workspaceReal || real.startsWith(workspaceReal + sep);
   }
 
-  /** ls-tree file list, or null on failure (caller must fail-closed). */
+  /** ls-tree file list, or null on failure (caller must abort the restore). */
   private lsTree(sha: string): string[] | null {
     const res = this.git(["ls-tree", "-r", "--name-only", "-z", sha]);
     if (res.code !== 0) return null;

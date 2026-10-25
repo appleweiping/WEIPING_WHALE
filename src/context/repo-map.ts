@@ -1,5 +1,5 @@
 /**
- * A compact, deterministic repository map for the initial agent context.
+ * A compact repository map, identical from run to run, for the initial agent context.
  *
  * Inspired by Aider's repo-map idea, but intentionally dependency-light: we
  * use git's own ignore-aware file index when available and conservative
@@ -136,7 +136,7 @@ function discoverFiles(root: string): { files: string[]; source: "git" | "filesy
   if (git.status === 0 && typeof git.stdout === "string") {
     return { files: git.stdout.split("\0").filter(Boolean), source: "git", truncated: false };
   }
-  // `spawnSync` preserves the bounded prefix when maxBuffer is exceeded. Use
+  // `spawnSync` keeps the truncated prefix when maxBuffer is exceeded. Use
   // that safe partial index instead of falling back to an unbounded full-tree
   // glob on exactly the repositories large enough to overflow the Git cap.
   if (["ENOBUFS", "ETIMEDOUT"].includes((git.error as NodeJS.ErrnoException | undefined)?.code ?? "") && typeof git.stdout === "string") {

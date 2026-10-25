@@ -6,7 +6,7 @@
  *   1. Constitution (base.md)        — compile-time constant
  *   2. Runtime-switching guidance     — constant
  *   3. Project instructions           — workspace-static (<instructions> blocks)
- *   4. Repository map                 — workspace-static, bounded orientation
+ *   4. Repository map                 — workspace-static, size-capped orientation
  *   5. User memory block              — session-stable
  *   6. Handoff relay                  — volatile (rewritten on /handoff and /compact)
  * The latest user message + tool results are appended by the agent loop after

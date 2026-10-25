@@ -334,7 +334,7 @@ export function validateConfig(config: Config): ConfigCheck[] {
   add(endpointConfigured(config.llm.base_url) && endpointHost(config.llm.base_url) !== "invalid-url" ? "ok" : "error", "llm.base_url", endpointHost(config.llm.base_url) === "invalid-url" ? "llm.base_url is not a valid URL" : "LLM endpoint is configured");
   add(config.llm.max_tokens > 0 ? "ok" : "error", "llm.max_tokens", config.llm.max_tokens > 0 ? "max_tokens is positive" : "max_tokens must be positive");
   add(config.llm.request_timeout_ms >= 1000 ? "ok" : "error", "llm.request_timeout_ms", config.llm.request_timeout_ms >= 1000 ? "request timeout is usable" : "request_timeout_ms must be >= 1000");
-  add(config.agent.max_iterations >= 1 ? (config.agent.max_iterations <= 200 ? "ok" : "warn") : "error", "agent.max_iterations", config.agent.max_iterations < 1 ? "max_iterations must be at least 1" : config.agent.max_iterations <= 200 ? "max_iterations is bounded" : "max_iterations above 200 can cause long runaway sessions");
+  add(config.agent.max_iterations >= 1 ? (config.agent.max_iterations <= 200 ? "ok" : "warn") : "error", "agent.max_iterations", config.agent.max_iterations < 1 ? "max_iterations must be at least 1" : config.agent.max_iterations <= 200 ? "max_iterations is within range" : "max_iterations above 200 can cause long runaway sessions");
 
   if (config.llm.api_key_source === "config") {
     add("warn", "auth.api_key_in_config", "Prefer api_key_env over storing an API key directly in TOML");

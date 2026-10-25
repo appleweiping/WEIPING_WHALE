@@ -72,7 +72,7 @@ function readTrustStore(): TrustStore {
         .slice(0, 10_000),
     };
   } catch {
-    // Malformed or unreadable trust state fails closed.
+    // Malformed or unreadable trust state counts as untrusted.
     return { version: 1, trusted: [] };
   }
 }

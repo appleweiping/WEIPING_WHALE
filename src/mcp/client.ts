@@ -3,8 +3,8 @@
  *
  * The previous hand-rolled JSON-RPC loop only understood a newline-delimited
  * subset of MCP. The SDK adds protocol negotiation, paginated tool discovery,
- * schema-aware results, request cancellation/timeouts, bounded input buffers,
- * and deterministic child-process shutdown while preserving the small adapter
+ * schema-aware results, request cancellation/timeouts, capped input buffers,
+ * and predictable child-process shutdown while preserving the small adapter
  * that WEIPING_WHALE exposes to the agent runtime.
  */
 import { Client, type Tool, type CallToolResult, type ContentBlock } from "@modelcontextprotocol/client";

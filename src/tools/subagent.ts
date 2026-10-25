@@ -1,5 +1,5 @@
 /**
- * tools/subagent.ts — bounded sub-agent pool for WEIPING_WHALE.
+ * tools/subagent.ts — capped sub-agent pool for WEIPING_WHALE.
  *
  * Exposes `agent_open` (spawn a background child agent on an objective) and
  * `agent_eval` (read a child's result/transcript) to the model. Children are
@@ -148,7 +148,7 @@ export class SubAgentManager {
     return [...this.agents.values()];
   }
 
-  /** Wait (bounded) for a child to finish, returning a formatted result string. */
+  /** Wait, with a timeout, for a child to finish, returning a formatted result string. */
   async waitFor(id: string, timeoutMs = 30000): Promise<string> {
     const record = this.agents.get(id);
     if (!record) return `no sub-agent '${id}'`;

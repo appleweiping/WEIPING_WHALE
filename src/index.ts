@@ -221,7 +221,7 @@ async function main() {
     printInfo(`Snapshots disabled: ${snapshotManager.reason()}`);
   }
 
-  // Bounded sub-agent pool: children are real Agent instances sharing config+MCP.
+  // Sub-agent pool with a size cap: children are real Agent instances sharing config+MCP.
   const subAgentManager = new SubAgentManager({
     config,
     mcpManager,

@@ -2,7 +2,7 @@
  * skills/install.ts — install a skill from GitHub into the global skills dir.
  *
  * Uses `git clone --depth 1` (no extra tar dependency). Validates that the
- * cloned tree contains a SKILL.md, records provenance in `.installed-from`, and
+ * cloned tree contains a SKILL.md, records the source URL in `.installed-from`, and
  * refuses sources that don't look like `owner/repo` or a GitHub URL.
  */
 import { spawnSync } from "child_process";
@@ -93,7 +93,7 @@ export function installSkill(spec: string, opts: { name?: string; force?: boolea
     return { ok: false, error: "no SKILL.md found in the cloned repository" };
   }
 
-  // Drop the cloned .git and record provenance.
+  // Drop the cloned .git and record where it came from.
   safeRm(join(tmp, ".git"));
   writeFileSync(
     join(tmp, ".installed-from"),
@@ -136,9 +136,9 @@ function isSymlinkish(p: string): boolean {
   }
 }
 
-/** Recursively detect any symbolic link within a tree (depth-bounded). */
+/** Recursively detect any symbolic link within a tree (with a depth limit). */
 function containsSymlink(dir: string, depth = 0): boolean {
-  // Fail closed on pathological depth: an uninspected subtree is not safe to
+  // Refuse on pathological depth: an uninspected subtree is not safe to
   // install merely because it exceeded our traversal budget.
   if (depth > 32) return true;
   let entries: string[];
